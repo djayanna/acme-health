@@ -25,6 +25,13 @@ if [ ! -d node_modules ]; then
   npm install --silent
 fi
 
+# better-sqlite3 is a native module: it only loads on the Node version it was built
+# for. Rebuild it if node_modules was installed under a different Node.
+if ! node -e "require('better-sqlite3')" 2>/dev/null; then
+  echo ">> rebuilding better-sqlite3 for Node $(node --version)"
+  npm rebuild better-sqlite3 --silent
+fi
+
 echo ">> starting backend on :$PORT (Ctrl-C to stop)"
 # The wallboard runs alongside the backend — background both, then wait on them so
 # Ctrl-C tears everything down together.

@@ -28,6 +28,18 @@ export function publicUrl(path: string): string {
   return host ? `${host}${path}` : path
 }
 
+// TAC validates optional IDs by format, and treats an empty string as a (malformed)
+// value. `.env.example` ships these empty, so drop blanks to mean "not set".
+for (const name of [
+  'TWILIO_CONVERSATION_CONFIGURATION_ID',
+  'TWILIO_STUDIO_HANDOFF_FLOW_SID',
+  'TWILIO_RCS_SENDER_ID',
+  'TWILIO_WHATSAPP_NUMBER',
+  'TWILIO_REGION',
+]) {
+  if (!process.env[name]?.trim()) delete process.env[name]
+}
+
 // TAC reads its public domain (no scheme) from TWILIO_VOICE_PUBLIC_DOMAIN; the rest of
 // the app uses PUBLIC_HOST. Default one from the other so .env only needs PUBLIC_HOST.
 process.env.TWILIO_VOICE_PUBLIC_DOMAIN ||= (process.env.PUBLIC_HOST ?? '').replace(/^https?:\/\//i, '')
