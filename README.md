@@ -38,12 +38,10 @@ mode the app fetches the configuration at startup and exits if it can't.
 acme-health/
   src/
     app.ts                 # Fastify entry — TACServer + the app's own routes
-    tac/                   # the TAC instance, voice channel, per-call context
+    tac/                   # the TAC instance, voice channel, per-call context, webhook signature check
     llm/                   # Claude adapter (streaming tool-use loop)
     observability.ts       # events store + emitEvent + GET /events (always on)
     twilioClient.ts        # Twilio access layer (SDK-or-REST, same interface)
-    channels/              # Channels — reusable Twilio primitive (helpers still used)
-    relay/                 # ConversationRelay primitive — superseded by TAC, not mounted
     handlers/              # the agent's TAC callbacks — one per scenario
     prompts/               # one system prompt per scenario
     tools/                 # the tools the agent calls mid-conversation (add-ons' in SHARED_TOOLS)

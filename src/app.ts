@@ -5,8 +5,6 @@
  * the ConversationRelay WebSocket, the relay and call-event callbacks — and validates
  * the Twilio signature on each. The app's own routes (`src/handlers/`, the events feed,
  * the health check) are registered on the same Fastify instance. See CLAUDE.md.
- *
- * `src/relay/` and `src/channels/`' Express router are not mounted: TAC replaces them.
  */
 
 import 'dotenv/config'

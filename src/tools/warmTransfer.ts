@@ -32,10 +32,9 @@ import type { FastifyInstance } from 'fastify'
 import twilio from 'twilio'
 import { createStudioHandoffTool } from 'twilio-agent-connect'
 
-import { publicUrl } from '../channels/index.js'
 import type { Tool } from '../llm/index.js'
 import { emitEvent } from '../observability.js'
-import { CallContext, requireTwilioSignature, studioHandoffEnabled, tac, voiceChannel } from '../tac/index.js'
+import { CallContext, publicUrl, requireTwilioSignature, studioHandoffEnabled, tac, voiceChannel } from '../tac/index.js'
 import { getClient } from '../twilioClient.js'
 
 // The handoff reason code `transfer_to_human` sends and `/transfer/action` catches.
