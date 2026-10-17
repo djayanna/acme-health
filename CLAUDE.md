@@ -26,7 +26,7 @@ layering**.
 - **Layering.** Code is laid out by role. `src/tac/` holds the TAC instance and voice
   channel; `src/handlers/` the agent's TAC callbacks (one module per scenario, plus
   webhook-only handlers); `src/prompts/` one system prompt per scenario; `src/tools/`
-  the tools the agent calls mid-conversation; `src/llm/` the Claude adapter;
+  the tools the agent calls mid-conversation; `src/llm/` the LangChain agent and model picker;
   `src/data/` clearly fake sample data. Twilio calls TAC doesn't cover are made in the
   handler or tool itself, through `getClient()`.
 - **Every Twilio-facing route checks the signature.** TAC's routes do it themselves;
@@ -38,9 +38,13 @@ layering**.
   collects the `TOOLS` of every add-on tool module, and each scenario's agent adds
   `SHARED_TOOLS` to its own tools. Every module under `src/tools/` exports `TOOLS`.
   Tools are sent with `strict: true`, so every property must be in `required`.
-- **Keep Claude's history append-only.** Never edit or reorder earlier messages, the
+- **Models are swapped through LangChain, not code.** `LLM_MODEL=provider:model` picks
+  the model (`src/llm/models.ts`); tools, prompts and handlers stay provider-neutral.
+  Don't import a provider SDK outside `src/llm/`. Use LangChain 1.x APIs
+  (`createAgent`, `createMiddleware`, `tool`), not legacy chains or executors.
+- **Keep the agent's history append-only.** Never edit or reorder earlier messages, the
   system prompt or the tool list mid-call — Claude Opus 5.5 rejects replayed thinking
-  after an edit. Pass assistant content back exactly as the API returned it.
+  after an edit. Append the agent's messages exactly as it returned them.
 - **Patient data stays fake and gated.** Anything that reads or changes an
   appointment requires `ctx.verifiedPatientId` (set by `verify_caller`). Never commit
   real PHI.
@@ -57,7 +61,7 @@ layering**.
 src/
   app.ts                 # Fastify entry — TACServer + the app's own routes
   tac/                   # TAC instance, voice channel, CallContext, publicUrl, signature check
-  llm/                   # Claude adapter — streaming tool-use loop (runTurn)
+  llm/                   # LangChain agent (runTurn) + model picker (LLM_MODEL)
   twilioClient.ts        # SDK-or-REST access layer (do not modify)
   observability.ts       # events store + emitEvent + GET /events
   handlers/              # The agent's TAC callbacks — one module per scenario
@@ -70,4 +74,4 @@ src/
 
 - Language: **typescript** (Node **22.13+**, TAC's minimum — see `.nvmrc`)
 - Twilio access mode: **sdk**, via Twilio Agent Connect
-- Agent LLM provider: **Anthropic — Claude** (`claude-opus-5-5` by default)
+- Agent LLM: **LangChain**, model from `LLM_MODEL` — default **Anthropic Claude** (`anthropic:claude-opus-5-5`)

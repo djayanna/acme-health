@@ -6,7 +6,7 @@
  *   Twilio number's Voice webhook → POST /twiml (TACServer, signature-checked)
  *     → ConversationRelay TwiML: greeting + `<Connect action>` for the handoff
  *     → caller speaks; TAC queues each turn and calls `tac.onMessageReady`
- *     → the agent resolves the turn with Claude (`src/llm/`) and its tools (`src/tools/`)
+ *     → the agent resolves the turn with the LangChain agent (`src/llm/`) and its tools (`src/tools/`)
  *     → the reply streams back token by token; a barge-in aborts it
  *
  * Exports `routes` (none of its own — TAC owns the voice routes) and wires TAC's
@@ -20,7 +20,7 @@
 import type { FastifyInstance } from 'fastify'
 import { MemoryPromptBuilder, type ConversationId } from 'twilio-agent-connect'
 
-import { runTurn, type Message, type Tool } from '../llm/index.js'
+import { runTurn, userMessage, type Message, type Tool } from '../llm/index.js'
 import { emitEvent } from '../observability.js'
 import { SYSTEM_PROMPT } from '../prompts/voiceAgent.js'
 import { CallContext, tac, voiceChannel } from '../tac/index.js'
@@ -76,7 +76,7 @@ tac.onMessageReady(async ({ conversationId, message, memory, session, channel, a
   const { ctx } = call
   if (ctx.handedOff) return
 
-  call.history.push({ role: 'user', content: message })
+  call.history.push(userMessage(message))
   const reply = runTurn(call.history, call.system, TOOLS, ctx, {
     signal: abortSignal,
     wrapUp: () => ctx.handedOff,
