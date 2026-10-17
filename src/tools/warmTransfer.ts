@@ -1,48 +1,63 @@
 /**
- * Warm transfer to a human over the PSTN.
+ * Hand the caller to a person at the office.
  *
- * Parks the caller in a per-call conference on hold, dials the office on a second
- * leg, confirms with a keypress, then bridges the two. Declines / no-answer /
- * voicemail fall back to the caller with an apology.
+ * Two paths, picked by the environment:
+ *   - Studio handoff (orchestrated mode + TWILIO_STUDIO_HANDOFF_FLOW_SID): TAC's
+ *     `createStudioHandoffTool` packages the conversation and memory for a Studio
+ *     flow (e.g. Flex). TAC points the relay `action` URL at the flow.
+ *   - Warm transfer over the PSTN (everything else, incl. ConversationRelay-only mode):
+ *     park the caller in a per-call conference on hold, dial the office, confirm with
+ *     a keypress, then bridge. Busy / no-answer / failed / declined / voicemail all
+ *     fall back to the caller with an apology.
+ * Either way the tool only queues the handoff; the voice handler sends the relay `end`
+ * frame after the agent's goodbye has been spoken.
  *
- * Routes (exported as `router`, listed in `src/handlers/` and mounted by app.ts):
+ * Routes (exported as `routes`, registered by app.ts; every one checks the Twilio signature):
  *   POST /transfer/action         → ConversationRelay `action` URL: park + dial office
  *   POST /transfer/office-answer  → office answered: say reason, gather accept
  *   POST /transfer/office-gather  → office keypress: bridge (1) or recover
+ *   POST /transfer/office-status  → office leg status: busy / no-answer / failed / hung up → recover
  *   POST /transfer/office-amd     → AMD callback: voicemail/machine → recover
  *   POST /transfer/recover        → caller leg: apologise and offer a callback
  *   POST /transfer/recover-choice → caller's callback/message choice
  *
- * Tool (exported in `TOOLS`, collected into `SHARED_TOOLS` by `src/tools/`):
- *   transfer_to_human(reason) → ends the ConversationRelay session with
- *     `handoffData = {reasonCode: "warm-transfer", reason}`; Twilio then POSTs the
- *     relay `action` URL (`/transfer/action`) and the routes above take over.
+ * The caller's own CallSid names the conference, and is how recovery finds the caller:
+ * a held caller is in a conference that hasn't started, which the Participants API
+ * doesn't reliably list, so recovery redirects the caller's call directly.
  *
- * The caller's own CallSid names the conference, so the office leg can be bridged
- * into the right room.
- *
- * Env: OFFICE_PHONE_NUMBER — the E.164 number this dials; RELAY_ACTION_URL — this
- * `/transfer/action` route's public URL, passed as the relay `action` URL.
+ * Env: OFFICE_PHONE_NUMBER — the E.164 number this dials.
  */
 
-import { Router, type Request } from 'express'
+import type { FastifyInstance } from 'fastify'
 import twilio from 'twilio'
+import { createStudioHandoffTool } from 'twilio-agent-connect'
 
 import { publicUrl } from '../channels/index.js'
 import type { Tool } from '../llm/index.js'
-import type { RelayToolCtx } from '../relay/index.js'
+import { emitEvent } from '../observability.js'
+import { CallContext, requireTwilioSignature, studioHandoffEnabled, tac, voiceChannel } from '../tac/index.js'
 import { getClient } from '../twilioClient.js'
 
-export const router = Router()
-
-// The handoff reason code `transferToHuman` sends and `/transfer/action` catches.
+// The handoff reason code `transfer_to_human` sends and `/transfer/action` catches.
 const HANDOFF_REASON_CODE = 'warm-transfer'
 const OFFICE_FALLBACK_REASON = 'A caller is holding to speak with the office.'
+const TRANSFER_ACTION_PATH = '/transfer/action'
 
-// Per-transfer context keyed by conference name — set when the caller is parked, read
-// by the office leg so the reason doesn't travel through query strings. In a
-// multi-instance deployment this would be a shared store (Redis, the events DB).
-const PENDING = new Map<string, { reason: string }>()
+/** The relay `<Connect action>` URL — undefined when the Studio flow owns the handoff. */
+export const RELAY_ACTION_URL = studioHandoffEnabled ? undefined : publicUrl(TRANSFER_ACTION_PATH)
+
+interface PendingTransfer {
+  reason: string
+  callerSid: string
+  /** Set once the caller is redirected out of hold, so recovery runs only once. */
+  recovered?: boolean
+  bridged?: boolean
+}
+
+// Per-transfer state keyed by conference name — set when the caller is parked, read by
+// the office leg so neither the reason nor the caller's CallSid travels in query
+// strings. In a multi-instance deployment this would be a shared store.
+const PENDING = new Map<string, PendingTransfer>()
 
 function conferenceName(callSid: string): string {
   return `warm-transfer-${callSid}`
@@ -57,80 +72,56 @@ function parseHandoff(raw: unknown): Record<string, string> {
   }
 }
 
-
-const NO_TRANSFER_REPLY =
-  "I'm sorry, I can't connect you right now, but I can take a message or help you another way."
-
-/** End the relay session for a warm transfer; Twilio then POSTs `/transfer/action`.
- * With no RELAY_ACTION_URL nothing would catch the handoff, so the agent apologises
- * and stays on the line instead. */
-export function transferToHuman({ reason }: { reason?: string }, ctx: RelayToolCtx) {
-  if (!process.env.RELAY_ACTION_URL) {
-    ctx.say(NO_TRANSFER_REPLY)
-    return { transferred: false, reason: 'RELAY_ACTION_URL is not set' }
+/** Queue a warm-transfer handoff for this call. */
+export function transferToHuman({ reason }: { reason: string }, ctx: CallContext) {
+  if (!process.env.OFFICE_PHONE_NUMBER) {
+    return { transferred: false, instruction: "Transfers aren't set up. Apologise and offer to take a message." }
   }
-  ctx.end({ reasonCode: HANDOFF_REASON_CODE, reason: reason || OFFICE_FALLBACK_REASON })
-  return { transferred: true }
+  ctx.requestHandoff({ reasonCode: HANDOFF_REASON_CODE, reason: reason || OFFICE_FALLBACK_REASON })
+  return { transferred: true, instruction: 'Tell the caller you are connecting them now, in one short sentence.' }
 }
 
-export const TOOLS: Tool<RelayToolCtx>[] = [
+const TRANSFER_DESCRIPTION =
+  'Hand the caller to a person at the office. Call this when the caller asks for a human, or needs help you cannot give or are not allowed to give.'
+
+const REASON_PARAMETERS = {
+  type: 'object' as const,
+  properties: {
+    reason: {
+      type: 'string',
+      description: 'One short line for the office about what the caller needs. No dates of birth or other identifiers.',
+    },
+  },
+  required: ['reason'],
+}
+
+/** Hand off through TAC's Studio flow: it sets the session's pending `end` frame. */
+async function studioHandoff({ reason }: { reason: string }, ctx: CallContext) {
+  const tool = createStudioHandoffTool(tac, ctx.session)
+  return tool.implementation({ reason })
+}
+
+export const TOOLS: Tool<CallContext>[] = [
   {
     name: 'transfer_to_human',
-    description:
-      'Hand the caller to a person at the office. Call this when the caller asks for a human, or needs help you cannot give or are not allowed to give.',
-    parameters: {
-      type: 'object',
-      properties: {
-        reason: {
-          type: 'string',
-          description: 'One short, non-sensitive line the office hears before accepting the call.',
-        },
-      },
-      required: ['reason'],
-    },
-    run: transferToHuman,
+    description: TRANSFER_DESCRIPTION,
+    parameters: REASON_PARAMETERS,
+    run: (args: { reason: string }, ctx: CallContext) =>
+      studioHandoffEnabled ? studioHandoff(args, ctx) : transferToHuman(args, ctx),
   },
 ]
 
-
-router.post('/transfer/action', async (req, res) => {
-  // ConversationRelay `action` URL — fired when the relay session ends. On a
-  // warm-transfer handoff: park the caller and dial the office. Any other session
-  // end (normal hang-up) just releases the call.
-  const handoff = parseHandoff(req.body?.HandoffData)
-  const callerSid = String(req.body?.CallSid ?? '')
-
-  const response = new twilio.twiml.VoiceResponse()
-  if (handoff.reasonCode !== HANDOFF_REASON_CODE) {
-    response.hangup()
-    res.type('text/xml').send(response.toString())
-    return
-  }
-
-  const conference = conferenceName(callerSid)
-  PENDING.set(conference, { reason: handoff.reason ?? OFFICE_FALLBACK_REASON })
-  await beginTransfer(conference)
-
-  // Park the caller: they wait on hold until the office joins and starts the room.
-  // endConferenceOnExit=true so hang-up tears the room down.
-  // https://www.twilio.com/docs/voice/twiml/conference
-  response
-    .dial()
-    .conference(
-      { startConferenceOnEnter: false, endConferenceOnExit: true, beep: 'false' },
-      conference,
-    )
-  res.type('text/xml').send(response.toString())
-})
-
+/** Place the office leg, with AMD and a status callback so every failure recovers the caller. */
 export async function beginTransfer(conference: string): Promise<string> {
-  // Place the office leg with Answering Machine Detection. The office leg runs
-  // /transfer/office-answer when answered; AMD routes machines/voicemail to recovery.
+  // https://www.twilio.com/docs/voice/api/call-resource#create-a-call-resource
   // https://www.twilio.com/docs/voice/answering-machine-detection
   const call = await getClient().calls.create({
     to: process.env.OFFICE_PHONE_NUMBER!,
     from: process.env.TWILIO_PHONE_NUMBER!,
     url: publicUrl(`/transfer/office-answer?conference=${conference}`),
+    timeout: 25,
+    statusCallback: publicUrl(`/transfer/office-status?conference=${conference}`),
+    statusCallbackEvent: ['completed'],
     machineDetection: 'DetectMessageEnd',
     asyncAmd: 'true',
     asyncAmdStatusCallback: publicUrl(`/transfer/office-amd?conference=${conference}`),
@@ -138,100 +129,172 @@ export async function beginTransfer(conference: string): Promise<string> {
   return call.sid
 }
 
-
-router.post('/transfer/office-answer', (req, res) => {
-  // Office leg answered — state the reason and gather a keypress to accept.
-  const conference = String(req.query.conference ?? '')
-  const reason = PENDING.get(conference)?.reason ?? OFFICE_FALLBACK_REASON
-
-  const response = new twilio.twiml.VoiceResponse()
-  const gather = response.gather({
-    numDigits: 1,
-    timeout: 10,
-    action: publicUrl(`/transfer/office-gather?conference=${conference}`),
-  })
-  gather.say(`${reason} Press 1 to accept the call, or hang up to decline.`)
-  // No input → fall through to a decline, which recovers the caller.
-  response.redirect(publicUrl(`/transfer/office-gather?conference=${conference}&decline=1`))
-  res.type('text/xml').send(response.toString())
-})
-
-router.post('/transfer/office-gather', async (req, res) => {
-  // Office pressed a key — bridge into the caller's conference on 1, else decline.
-  const conference = String(req.query.conference ?? '')
-  const digit = String(req.body?.Digits ?? '')
-
-  const response = new twilio.twiml.VoiceResponse()
-  if (digit === '1') {
-    // Join the caller's room and start it — hold music stops, the two are bridged.
-    PENDING.delete(conference)
-    response
-      .dial()
-      .conference(
-        { startConferenceOnEnter: true, endConferenceOnExit: true, beep: 'false' },
-        conference,
-      )
-  } else {
-    await recoverCaller(conference)
-    response.say('No problem — goodbye.')
-    response.hangup()
-  }
-  res.type('text/xml').send(response.toString())
-})
-
-router.post('/transfer/office-amd', async (req, res) => {
-  // AMD status callback — a machine/voicemail answered the office leg. Hang it up and
-  // recover the caller.
-  const conference = String(req.query.conference ?? '')
-  const answeredBy = String(req.body?.AnsweredBy ?? '')
-  const officeCallSid = String(req.body?.CallSid ?? '')
-  if (answeredBy.startsWith('machine') || answeredBy === 'fax') {
-    if (officeCallSid) await getClient().calls(officeCallSid).update({ status: 'completed' })
-    await recoverCaller(conference)
-  }
-  res.type('text/xml').send('')
-})
-
-
+/** Move the parked caller out of hold to the recovery prompt — at most once per transfer. */
 async function recoverCaller(conference: string): Promise<void> {
-  // Redirect the parked caller's leg to the recovery TwiML. The caller is the only
-  // remaining participant; redirecting them out of the conference ends the hold.
-  PENDING.delete(conference)
-  const participants = await getClient().conferences(conference).participants.list({ limit: 1 })
-  for (const participant of participants) {
+  const pending = PENDING.get(conference)
+  if (!pending || pending.recovered || pending.bridged) return
+  pending.recovered = true
+  try {
+    // https://www.twilio.com/docs/voice/api/call-resource#update-a-call-resource
     await getClient()
-      .calls(participant.callSid)
+      .calls(pending.callerSid)
       .update({ url: publicUrl('/transfer/recover'), method: 'POST' })
+    emitEvent('warmTransfer', 'recoverCaller', 'success', { correlationId: pending.callerSid })
+  } catch (err) {
+    // The caller already hung up — nothing to recover.
+    emitEvent('warmTransfer', 'recoverCaller', 'error', { correlationId: pending.callerSid, status: 'error' })
+    console.warn('warmTransfer: could not redirect caller', err instanceof Error ? err.message : err)
+  } finally {
+    PENDING.delete(conference)
   }
 }
 
-router.post('/transfer/recover', (_req, res) => {
-  // Caller leg after a failed transfer — apologise and offer a callback or message.
-  const response = new twilio.twiml.VoiceResponse()
-  const gather = response.gather({ numDigits: 1, timeout: 8, action: publicUrl('/transfer/recover-choice') })
-  gather.say(
-    "I'm sorry — the office isn't available right now. " +
-      'Press 1 to request a callback, or 2 to leave a message.',
-  )
-  response.say("I didn't catch that. Please call again later. Goodbye.")
-  response.hangup()
-  res.type('text/xml').send(response.toString())
-})
+type Form = Record<string, string | undefined>
+type Query = { conference?: string; decline?: string }
 
-router.post('/transfer/recover-choice', (req, res) => {
-  // Record the caller's callback/message choice. Stubbed: acknowledge and hang up.
-  // Wire this to your callback queue or voicemail (<Record>) backend.
-  const digit = String(req.body?.Digits ?? '')
-  const response = new twilio.twiml.VoiceResponse()
-  if (digit === '1') {
-    response.say("Thanks — we'll call you back as soon as the office is free. Goodbye.")
-  } else if (digit === '2') {
-    response.say('Please leave your message after the tone.')
-    response.record({ maxLength: 120, playBeep: true })
-  } else {
-    response.say('No problem. Please call again later. Goodbye.')
-  }
-  response.hangup()
-  res.type('text/xml').send(response.toString())
-})
+const xml = (response: twilio.twiml.VoiceResponse) => response.toString()
 
+export async function routes(app: FastifyInstance): Promise<void> {
+  const signed = { preHandler: requireTwilioSignature }
+
+  app.post<{ Body: Form }>(TRANSFER_ACTION_PATH, signed, async (req, reply) => {
+    // ConversationRelay `action` URL — fired when the relay session ends. This route
+    // replaces TAC's own action callback, so pass the payload on for TAC's session
+    // cleanup first. On a warm-transfer handoff: park the caller and dial the office.
+    // Any other session end (normal hang-up) just releases the call.
+    await voiceChannel.handleTwilioProviderCallback(req.body ?? {}).catch((err) => {
+      console.warn('warmTransfer: TAC relay callback failed', err instanceof Error ? err.message : err)
+    })
+    const handoff = parseHandoff(req.body?.HandoffData)
+    const callerSid = String(req.body?.CallSid ?? '')
+    const response = new twilio.twiml.VoiceResponse()
+    reply.type('text/xml')
+
+    if (handoff.reasonCode !== HANDOFF_REASON_CODE || !callerSid) {
+      response.hangup()
+      return xml(response)
+    }
+
+    const conference = conferenceName(callerSid)
+    PENDING.set(conference, { reason: handoff.reason ?? OFFICE_FALLBACK_REASON, callerSid })
+    try {
+      await beginTransfer(conference)
+      emitEvent('warmTransfer', 'beginTransfer', 'success', { correlationId: callerSid })
+    } catch (err) {
+      // Couldn't even place the office leg — tell the caller now instead of parking them.
+      PENDING.delete(conference)
+      emitEvent('warmTransfer', 'beginTransfer', 'error', { correlationId: callerSid, status: 'error' })
+      console.error('warmTransfer: failed to dial office', err)
+      response.redirect(publicUrl('/transfer/recover'))
+      return xml(response)
+    }
+
+    // Park the caller: they wait on hold until the office joins and starts the room.
+    // endConferenceOnExit=true so hang-up tears the room down.
+    // https://www.twilio.com/docs/voice/twiml/conference
+    response
+      .dial()
+      .conference({ startConferenceOnEnter: false, endConferenceOnExit: true, beep: 'false' }, conference)
+    return xml(response)
+  })
+
+  app.post<{ Querystring: Query }>('/transfer/office-answer', signed, async (req, reply) => {
+    // Office leg answered — state the reason and gather a keypress to accept.
+    const conference = String(req.query.conference ?? '')
+    const reason = PENDING.get(conference)?.reason ?? OFFICE_FALLBACK_REASON
+
+    const response = new twilio.twiml.VoiceResponse()
+    const gather = response.gather({
+      numDigits: 1,
+      timeout: 10,
+      action: publicUrl(`/transfer/office-gather?conference=${conference}`),
+    })
+    gather.say(`${reason} Press 1 to accept the call, or hang up to decline.`)
+    // No input → fall through to a decline, which recovers the caller.
+    response.redirect(publicUrl(`/transfer/office-gather?conference=${conference}&decline=1`))
+    reply.type('text/xml')
+    return xml(response)
+  })
+
+  app.post<{ Body: Form; Querystring: Query }>('/transfer/office-gather', signed, async (req, reply) => {
+    // Office pressed a key — bridge into the caller's conference on 1, else decline.
+    const conference = String(req.query.conference ?? '')
+    const pending = PENDING.get(conference)
+    const response = new twilio.twiml.VoiceResponse()
+    reply.type('text/xml')
+
+    if (String(req.body?.Digits ?? '') === '1' && pending && !pending.recovered) {
+      // Join the caller's room and start it — hold music stops, the two are bridged.
+      pending.bridged = true
+      PENDING.delete(conference)
+      response
+        .dial()
+        .conference({ startConferenceOnEnter: true, endConferenceOnExit: true, beep: 'false' }, conference)
+      return xml(response)
+    }
+
+    await recoverCaller(conference)
+    response.say(pending ? 'No problem — goodbye.' : 'The caller is no longer waiting. Goodbye.')
+    response.hangup()
+    return xml(response)
+  })
+
+  app.post<{ Body: Form; Querystring: Query }>('/transfer/office-status', signed, async (req, reply) => {
+    // Office leg finished. If it never bridged (busy, no-answer, failed, canceled, or
+    // answered and hung up before pressing 1), bring the caller back.
+    await recoverCaller(String(req.query.conference ?? ''))
+    reply.code(204)
+    return ''
+  })
+
+  app.post<{ Body: Form; Querystring: Query }>('/transfer/office-amd', signed, async (req, reply) => {
+    // AMD result — a machine/voicemail answered the office leg. Hang it up and recover
+    // the caller. https://www.twilio.com/docs/voice/answering-machine-detection
+    const conference = String(req.query.conference ?? '')
+    const answeredBy = String(req.body?.AnsweredBy ?? '')
+    const officeCallSid = String(req.body?.CallSid ?? '')
+    if (answeredBy.startsWith('machine') || answeredBy === 'fax') {
+      await recoverCaller(conference)
+      if (officeCallSid) {
+        await getClient()
+          .calls(officeCallSid)
+          .update({ status: 'completed' })
+          .catch(() => undefined) // already ended
+      }
+    }
+    reply.code(204)
+    return ''
+  })
+
+  app.post('/transfer/recover', signed, async (_req, reply) => {
+    // Caller leg after a failed transfer — apologise and offer a callback or message.
+    const response = new twilio.twiml.VoiceResponse()
+    const gather = response.gather({ numDigits: 1, timeout: 8, action: publicUrl('/transfer/recover-choice') })
+    gather.say(
+      "I'm sorry — the office isn't available right now. Press 1 to request a callback, or 2 to leave a message.",
+    )
+    response.say("I didn't catch that. Please call again later. Goodbye.")
+    response.hangup()
+    reply.type('text/xml')
+    return xml(response)
+  })
+
+  app.post<{ Body: Form }>('/transfer/recover-choice', signed, async (req, reply) => {
+    // Record the caller's callback/message choice. Stubbed: acknowledge and hang up.
+    // Wire this to your callback queue or voicemail backend — and keep recordings,
+    // which may contain PHI, on a HIPAA-eligible account under a BAA.
+    const digit = String(req.body?.Digits ?? '')
+    const response = new twilio.twiml.VoiceResponse()
+    if (digit === '1') {
+      response.say("Thanks — we'll call you back as soon as the office is free. Goodbye.")
+    } else if (digit === '2') {
+      response.say('Please leave your message after the tone.')
+      response.record({ maxLength: 120, playBeep: true })
+    } else {
+      response.say('No problem. Please call again later. Goodbye.')
+    }
+    response.hangup()
+    reply.type('text/xml')
+    return xml(response)
+  })
+}

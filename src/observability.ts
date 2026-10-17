@@ -19,8 +19,8 @@
  * plus one entry in `buildStore` — no change to any component.
  */
 
-import { Router } from 'express'
 import Database from 'better-sqlite3'
+import type { FastifyInstance } from 'fastify'
 
 export const EVENT_TYPES = ['start', 'success', 'error'] as const
 export type EventType = (typeof EVENT_TYPES)[number]
@@ -130,10 +130,11 @@ export function emitEvent(
   }
 }
 
-export const router: Router = Router()
-
-router.get('/events', (req, res) => {
-  const raw = Number(req.query.limit ?? 100)
-  const limit = Math.min(Math.max(Number.isFinite(raw) ? raw : 100, 1), 1000)
-  res.json(store.recent(limit))
-})
+/** GET /events — the wallboard's feed. */
+export async function routes(app: FastifyInstance): Promise<void> {
+  app.get<{ Querystring: { limit?: string } }>('/events', async (req) => {
+    const raw = Number(req.query.limit ?? 100)
+    const limit = Math.min(Math.max(Number.isFinite(raw) ? raw : 100, 1), 1000)
+    return store.recent(limit)
+  })
+}

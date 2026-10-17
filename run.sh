@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # acme-health — run the generated demo.
 #
-# Usage: ./run.sh          # start the backend on :$PORT (default 8080)
+# Usage: ./run.sh          # start the backend on :$PORT (default 8080) + the wallboard
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -13,8 +13,10 @@ if [ -f .env ]; then
 fi
 export PORT="${PORT:-8080}"
 
-if ! command -v node >/dev/null 2>&1; then
-  echo "This project needs Node 18.17+. Install: https://nodejs.org"
+# Twilio Agent Connect needs Node 22.13+.
+if ! node -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>22||(a===22&&b>=13)?0:1)' 2>/dev/null; then
+  echo "This project needs Node 22.13+ (found: $(node --version 2>/dev/null || echo none))."
+  echo "Install: https://nodejs.org  — or with nvm: nvm install 22 && nvm use 22"
   exit 1
 fi
 
@@ -24,15 +26,11 @@ if [ ! -d node_modules ]; then
 fi
 
 echo ">> starting backend on :$PORT (Ctrl-C to stop)"
-# One or more UIs run alongside the backend — background the backend and each
-# UI, then wait on all of them so Ctrl-C tears everything down together.
+# The wallboard runs alongside the backend — background both, then wait on them so
+# Ctrl-C tears everything down together.
 npm run dev &
 PIDS=$!
 trap 'kill $PIDS 2>/dev/null || true' EXIT
-export FRONTEND_PORT="${FRONTEND_PORT:-5174}"
-echo ">> starting demo UI on :$FRONTEND_PORT"
-(cd frontend && npm install --silent && npm run dev) &
-PIDS="$PIDS $!"
 export WALLBOARD_PORT="${WALLBOARD_PORT:-5175}"
 echo ">> starting wallboard on :$WALLBOARD_PORT"
 (cd wallboard && npm install --silent && npm run dev) &

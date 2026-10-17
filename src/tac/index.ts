@@ -1,0 +1,55 @@
+/**
+ * Twilio Agent Connect (TAC) — the app's single TAC instance and voice channel.
+ *
+ * TAC owns the ConversationRelay plumbing: the inbound TwiML (`POST /twiml`), the
+ * WebSocket Twilio streams the call over, prompt queueing, interrupt cancellation and
+ * Twilio signature validation on every route `TACServer` registers.
+ *
+ * Mode is picked by the environment, not the code:
+ *   TWILIO_CONVERSATION_CONFIGURATION_ID set   → orchestrated: Conversation Orchestrator
+ *     + Conversation Memory (profile, observations, summaries) are on.
+ *   TWILIO_CONVERSATION_CONFIGURATION_ID unset → ConversationRelay-only: voice works with
+ *     plain Twilio credentials; memory, knowledge and the Studio handoff are off.
+ * Everything that depends on the mode checks the flags exported here.
+ *
+ * Docs: https://www.twilio.com/docs/conversations/agent-connect/overview
+ */
+
+import type { FastifyReply, FastifyRequest } from 'fastify'
+import { TAC, TACConfig, VoiceChannel } from 'twilio-agent-connect'
+
+import { publicUrl, verifySignature, type Params } from '../channels/index.js'
+
+export { CallContext } from './callContext.js'
+
+// TAC reads its public domain (no scheme) from TWILIO_VOICE_PUBLIC_DOMAIN; the rest of
+// the app uses PUBLIC_HOST. Default one from the other so .env only needs PUBLIC_HOST.
+process.env.TWILIO_VOICE_PUBLIC_DOMAIN ||= (process.env.PUBLIC_HOST ?? '').replace(/^https?:\/\//i, '')
+
+export const tac = await TAC.create({ config: TACConfig.fromEnv() })
+
+/** True when Conversation Orchestrator (and with it Conversation Memory) is configured. */
+export const orchestrated = Boolean(tac.getConfig().conversationConfigurationId)
+
+/** TAC's Studio handoff needs Orchestrator plus a Studio flow; otherwise use the warm transfer. */
+export const studioHandoffEnabled = orchestrated && Boolean(tac.getConfig().studioHandoffFlowSid)
+
+export const voiceChannel = new VoiceChannel(tac, {
+  // Fetch the caller's memory once at call start and reuse it every turn, so the
+  // system prompt stays identical for the whole call. Relay-only mode has no memory.
+  memoryMode: orchestrated ? 'once' : 'never',
+})
+tac.registerChannel(voiceChannel)
+
+/**
+ * Fastify `preHandler` that rejects a request whose `X-Twilio-Signature` doesn't match.
+ *
+ * TACServer validates the routes it registers itself; this covers the app's own Twilio
+ * webhooks. The signed URL is the public URL including the query string.
+ */
+export async function requireTwilioSignature(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const params = (req.body ?? {}) as Params
+  if (!verifySignature(publicUrl(req.url), params, req.headers['x-twilio-signature'] as string | undefined)) {
+    await reply.code(403).type('text/plain').send('invalid signature')
+  }
+}
