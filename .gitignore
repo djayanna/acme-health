@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+# Events store (§6)
+events.db
+events.db-journal
+events.db-wal
