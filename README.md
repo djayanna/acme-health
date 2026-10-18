@@ -86,9 +86,15 @@ to office" divider.
 
 - **Source:** Conversation Orchestrator status callbacks (`COMMUNICATION_CREATED`,
   `PARTICIPANT_*`, `CONVERSATION_*`) posted to `POST /transcripts/webhook`. No polling.
-- **Transcription:** the configuration's passive VOICE capture rules. The ConversationRelay
-  TwiML deliberately omits `conversationConfiguration`, so each call runs one
-  speech-to-text engine, not two.
+- **Transcription:** ConversationRelay ingests the AI portion (TAC puts
+  `conversationConfiguration` on its TwiML, which creates the conversation TAC then
+  looks up by Call SID). At a warm transfer, `/transfer/action` starts
+  `<Transcription conversationId>` on the caller's leg for the human portion. One
+  speech-to-text engine at a time. Keep **VOICE capture rules off** for this number:
+  with them on, calls run two engines (and on this account passive capture fails with
+  error 32650, so TAC can't find a conversation and the call never starts).
+- **Lifecycle:** VOICE timeouts are `inactive: 5, closed: 15` minutes so the
+  conversation is still open when the human portion starts.
 - **Push:** the wallboard reads `GET /calls/stream` (Server-Sent Events).
 - **Storage:** transcripts are cached in the app's SQLite file (`EVENTS_DB_PATH`) so
   restarts keep them; Orchestrator remains the record. Calls older than
@@ -101,6 +107,9 @@ One-time setup (and again whenever `PUBLIC_HOST` changes):
 npm run add-status-callback            # shows the statusCallbacks change
 npm run add-status-callback -- --apply # sends it (keeps existing callbacks)
 ```
+
+`npm run create-voice-config` creates the dedicated `acme-health-voice` configuration
+(no capture rules, the timeouts above) if you need to rebuild it.
 
 ## Sample data
 
