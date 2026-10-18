@@ -35,6 +35,7 @@ import { createStudioHandoffTool } from 'twilio-agent-connect'
 import type { Tool } from '../llm/index.js'
 import { emitEvent } from '../observability.js'
 import { CallContext, publicUrl, requireTwilioSignature, studioHandoffEnabled, tac, voiceChannel } from '../tac/index.js'
+import { linkCalls, markTransferred } from '../transcripts/store.js'
 import { getClient } from '../twilioClient.js'
 
 // The handoff reason code `transfer_to_human` sends and `/transfer/action` catches.
@@ -177,7 +178,10 @@ export async function routes(app: FastifyInstance): Promise<void> {
     const conference = conferenceName(callerSid)
     PENDING.set(conference, { reason: handoff.reason ?? OFFICE_FALLBACK_REASON, callerSid })
     try {
-      await beginTransfer(conference)
+      const officeSid = await beginTransfer(conference)
+      // The office leg is its own captured conversation; file it under this caller's
+      // transcript so the human portion shows on the same call.
+      linkCalls(callerSid, officeSid)
       emitEvent('warmTransfer', 'beginTransfer', 'success', { correlationId: callerSid })
     } catch (err) {
       // Couldn't even place the office leg — tell the caller now instead of parking them.
@@ -226,6 +230,7 @@ export async function routes(app: FastifyInstance): Promise<void> {
       // Join the caller's room and start it — hold music stops, the two are bridged.
       pending.bridged = true
       PENDING.delete(conference)
+      markTransferred(pending.callerSid)
       response
         .dial()
         .conference({ startConferenceOnEnter: true, endConferenceOnExit: true, beep: 'false' }, conference)

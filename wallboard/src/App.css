@@ -115,6 +115,158 @@ code.corr {
   margin: 0;
 }
 
+/* Calls + live transcript */
+.panel.calls {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 2.5fr;
+  gap: 16px;
+}
+.calls-list {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+.call-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto auto;
+  align-items: center;
+  gap: 8px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.call-row:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+.call-row.selected {
+  border-color: var(--accent, #0d6efd);
+  background: rgba(13, 110, 253, 0.07);
+}
+.call-from {
+  font-weight: 600;
+}
+.count {
+  font-size: 11px;
+}
+.badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(130, 80, 223, 0.15);
+  color: #8250df;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.dot.live {
+  background: #1a7f37;
+  box-shadow: 0 0 0 3px rgba(26, 127, 55, 0.2);
+}
+.dot.ended {
+  background: #999;
+}
+.stream {
+  font-size: 10px;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.stream.live {
+  color: #1a7f37;
+  background: rgba(26, 127, 55, 0.12);
+}
+.stream.connecting,
+.stream.reconnecting {
+  color: #9a6700;
+  background: rgba(154, 103, 0, 0.12);
+}
+
+.transcript {
+  display: grid;
+  gap: 8px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.transcript-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+.bubble {
+  max-width: 75%;
+  padding: 8px 11px;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.35;
+}
+.bubble .who {
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+/* Customer on the left; both agent kinds on the right, coloured by who they are. */
+.bubble.customer,
+.bubble.unknown {
+  justify-self: start;
+  background: rgba(0, 0, 0, 0.05);
+}
+.bubble.ai {
+  justify-self: end;
+  background: rgba(13, 110, 253, 0.1);
+}
+.bubble.ai .who {
+  color: #0d6efd;
+}
+.bubble.human {
+  justify-self: end;
+  background: rgba(130, 80, 223, 0.12);
+}
+.bubble.human .who {
+  color: #8250df;
+}
+.divider {
+  justify-self: center;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8250df;
+  padding: 4px 0;
+}
+
+@media (max-width: 800px) {
+  .panel.calls {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .call-row:hover {
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .bubble.customer,
+  .bubble.unknown {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .transcript-head {
+    border-bottom-color: rgba(255, 255, 255, 0.1);
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   .panel,
   .tile {

@@ -7,3 +7,4 @@ dist/
 events.db
 events.db-journal
 events.db-wal
+events.db-shm

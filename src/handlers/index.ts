@@ -9,5 +9,6 @@ import type { FastifyPluginAsync } from 'fastify'
 
 import { routes as voiceAgentRoutes } from './voiceAgent.js'
 import { routes as warmTransferRoutes } from '../tools/warmTransfer.js'
+import { routes as transcriptRoutes } from '../transcripts/routes.js'
 
-export const ROUTES: FastifyPluginAsync[] = [voiceAgentRoutes, warmTransferRoutes]
+export const ROUTES: FastifyPluginAsync[] = [voiceAgentRoutes, warmTransferRoutes, transcriptRoutes]

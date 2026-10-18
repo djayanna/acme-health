@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import { CallRow, Transcript } from './Transcript'
+import { useCallStream } from './useCallStream'
+
 // One row of the backend's events table (CLAUDE.md §6).
 type EventRow = {
   id: number
@@ -26,7 +29,13 @@ export function App() {
   const [updatedAt, setUpdatedAt] = useState<string>('')
   const [error, setError] = useState<string>('')
 
-  // Deliberately simple: a Refresh button pings GET /events. No polling, no WS.
+  // Calls + transcripts arrive live over Server-Sent Events.
+  const { calls, state: streamState } = useCallStream()
+  const [selectedSid, setSelectedSid] = useState<string>()
+  // Follow the newest call until the user picks one.
+  const selected = calls.find((c) => c.callSid === selectedSid) ?? calls[0]
+
+  // The events table stays deliberately simple: a Refresh button pings GET /events.
   async function refresh() {
     try {
       const res = await fetch('/api/events?limit=100')
@@ -62,9 +71,31 @@ export function App() {
       {error && <p className="err">Could not reach the backend: {error}</p>}
 
       <div className="tiles">
+        <Tile label="live calls" value={calls.filter((c) => !c.endedAt).length} />
         <Tile label="events" value={stats.total} />
         <Tile label="errors" value={stats.errors} />
         <Tile label="interactions" value={stats.correlations} />
+      </div>
+
+      <div className="panel calls">
+        <div className="calls-list">
+          <h2>
+            calls <span className={`stream ${streamState}`}>{streamState}</span>
+          </h2>
+          {calls.map((call) => (
+            <CallRow
+              key={call.callSid}
+              call={call}
+              selected={call.callSid === selected?.callSid}
+              onSelect={() => setSelectedSid(call.callSid)}
+            />
+          ))}
+          {!calls.length && <p className="dim">no calls yet — call the number to see one appear</p>}
+        </div>
+        <div className="calls-transcript">
+          <h2>transcript</h2>
+          <Transcript call={selected} />
+        </div>
       </div>
 
       <div className="panel">

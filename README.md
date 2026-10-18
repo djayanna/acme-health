@@ -71,10 +71,36 @@ model that supports tool calling and streaming.
 | `WS /ws` | TAC | ConversationRelay WebSocket |
 | `POST /transfer/*` | `src/tools/warmTransfer.ts` | Warm transfer to the office |
 | `POST /webhook` | TAC | Conversation Orchestrator events (orchestrated mode) |
+| `POST /transcripts/webhook` | `src/transcripts/routes.ts` | Orchestrator status callbacks → transcripts |
+| `GET /calls`, `GET /calls/stream` | `src/transcripts/routes.ts` | Wallboard transcripts (snapshot / SSE), local only |
 | `GET /events` | `src/observability.ts` | Wallboard feed |
 
 Every Twilio-facing route checks the `X-Twilio-Signature`, so `PUBLIC_HOST` must match
 the host Twilio calls exactly.
+
+## Live transcripts on the wallboard
+
+The wallboard shows each call live, labelled **Customer / AI agent / Office**. After a
+warm transfer, the office person's words appear in the same call, below a "Transferred
+to office" divider.
+
+- **Source:** Conversation Orchestrator status callbacks (`COMMUNICATION_CREATED`,
+  `PARTICIPANT_*`, `CONVERSATION_*`) posted to `POST /transcripts/webhook`. No polling.
+- **Transcription:** the configuration's passive VOICE capture rules. The ConversationRelay
+  TwiML deliberately omits `conversationConfiguration`, so each call runs one
+  speech-to-text engine, not two.
+- **Push:** the wallboard reads `GET /calls/stream` (Server-Sent Events).
+- **Storage:** transcripts are cached in the app's SQLite file (`EVENTS_DB_PATH`) so
+  restarts keep them; Orchestrator remains the record. Calls older than
+  `TRANSCRIPT_RETENTION_DAYS` (default 7) are deleted at startup. `/calls` and
+  `/calls/stream` answer local requests only.
+
+One-time setup (and again whenever `PUBLIC_HOST` changes):
+
+```bash
+npm run add-status-callback            # shows the statusCallbacks change
+npm run add-status-callback -- --apply # sends it (keeps existing callbacks)
+```
 
 ## Sample data
 

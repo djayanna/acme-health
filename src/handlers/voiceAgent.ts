@@ -53,7 +53,14 @@ const CALLS = new Map<string, Call>()
 // Inbound TwiML: the agent's own greeting, plus the `<Connect action>` the warm transfer
 // catches. With a Studio flow configured, RELAY_ACTION_URL is undefined and TAC points
 // the action at the flow instead.
+//
+// `conversationConfiguration: undefined` drops the attribute TAC adds in orchestrated
+// mode. The configuration's passive VOICE capture rules already transcribe this number
+// into Conversation Orchestrator; routing the call there from ConversationRelay too
+// would run a second speech-to-text engine on every call (double STT billing).
+// https://www.twilio.com/docs/conversations/orchestrator/concepts/channels
 voiceChannel.onInboundCallTwiml(async () => ({
+  conversationConfiguration: undefined,
   welcomeGreeting: GREETING,
   ...(RELAY_ACTION_URL && { actionUrl: RELAY_ACTION_URL }),
   ...(process.env.RELAY_VOICE && { voice: process.env.RELAY_VOICE }),
