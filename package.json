@@ -9,7 +9,8 @@
     "start": "tsx src/app.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "add-status-callback": "tsx scripts/add-status-callback.ts"
+    "add-status-callback": "tsx scripts/add-status-callback.ts",
+    "create-voice-config": "tsx scripts/create-voice-config.ts"
   },
   "dependencies": {
     "@fastify/formbody": "^8.0.2",
