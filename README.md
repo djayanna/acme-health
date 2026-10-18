@@ -111,6 +111,18 @@ npm run add-status-callback -- --apply # sends it (keeps existing callbacks)
 `npm run create-voice-config` creates the dedicated `acme-health-voice` configuration
 (no capture rules, the timeouts above) if you need to rebuild it.
 
+## Clinic FAQ for Enterprise Knowledge
+
+`docs/knowledge/acme-health-faq.md` is a sample FAQ (31 questions, fictional clinic) written
+for retrieval: one question per heading, and every answer makes sense on its own.
+
+```bash
+npm run upload-knowledge            # preview: shows the knowledge base and its sources
+npm run upload-knowledge -- --apply # uploads the FAQ to TWILIO_KNOWLEDGE_BASE_ID, then test-searches it
+```
+
+`knowledge_lookup` searches it when `TWILIO_KNOWLEDGE_BASE_ID` is set in orchestrated mode.
+
 ## Sample data
 
 Patients for caller verification are in `src/data/patients.ts` — e.g. say you're
