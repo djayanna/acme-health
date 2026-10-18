@@ -73,6 +73,17 @@ if (JSON.stringify(before) === JSON.stringify(after)) {
     console.error(await put.text())
     process.exit(1)
   }
-  const check = (await (await fetch(`${BASE}/${configId}`, { headers })).json()) as typeof config
-  console.log('statusCallbacks now:   ', check.statusCallbacks)
+  // Updates are applied asynchronously (202): wait for the new version to show up.
+  const want = JSON.stringify(after.map((cb) => cb.url).sort())
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await new Promise((r) => setTimeout(r, 2500))
+    const check = (await (await fetch(`${BASE}/${configId}`, { headers })).json()) as typeof config
+    const now = (check.statusCallbacks ?? []).map((cb) => cb.url).sort()
+    if (JSON.stringify(now) === want) {
+      console.log(`applied (version ${check.version}):`, check.statusCallbacks)
+      process.exit(0)
+    }
+  }
+  console.error('accepted, but not visible after 30 s — check the configuration in the Console')
+  process.exit(1)
 }
