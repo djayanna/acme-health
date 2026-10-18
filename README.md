@@ -118,6 +118,8 @@ Patients for caller verification are in `src/data/patients.ts` — e.g. say you'
 
 ## Events (§6)
 
+Table layout for events and transcripts: [`docs/schema.md`](docs/schema.md).
+
 Every integration records what it does to an events store, exposed at
 `GET /events`. The store backend is set by `EVENTS_BACKEND` (default `sqlite`,
 written to `EVENTS_DB_PATH`, default `events.db`) and is swappable without
