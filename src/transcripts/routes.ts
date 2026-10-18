@@ -50,7 +50,9 @@ const closedBeforeTracked = new Set<string>()
 
 function handleConversation(data: Record<string, any>, at: string): void {
   if (CONFIGURATION_ID && data.configurationId && data.configurationId !== CONFIGURATION_ID) return
-  if (data.status !== 'CLOSED') return
+  // Voice timeouts keep the conversation open a few minutes after hang-up (so a warm
+  // transfer can continue it); INACTIVE is the first sign the call is over.
+  if (data.status !== 'CLOSED' && data.status !== 'INACTIVE') return
   const call = callForConversation(data.id)
   if (!call) closedBeforeTracked.add(data.id)
   else if (call.leg === 'caller') endCall(call.callSid, data.updatedAt ?? at)
@@ -73,12 +75,13 @@ function handleCommunication(data: Record<string, any>, at: string): void {
   const call = callForConversation(data.conversationId)!
   if (closedBeforeTracked.delete(data.conversationId) && call.leg === 'caller') endCall(call.callSid, at)
 
+  const lineAt = data.occurredAt ?? data.createdAt ?? at
   addLine({
     id: data.id,
     callSid: call.callSid,
     conversationId: data.conversationId,
-    at: data.occurredAt ?? data.createdAt ?? at,
-    speaker: speakerFor(data.author?.participantId, data.author?.address, data.conversationId),
+    at: lineAt,
+    speaker: speakerFor(data.author?.participantId, data.author?.address, data.conversationId, lineAt),
     text: content.text.trim(),
   })
 }

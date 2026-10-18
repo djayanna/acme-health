@@ -208,8 +208,18 @@ export function upsertParticipant(participantId: string, conversationId: string,
 }
 
 /** Who a participant is on this call, from its Orchestrator type, or its address as a fallback. */
-export function speakerFor(participantId: string | undefined, authorAddress: string | undefined, conversationId: string): Speaker {
-  const leg = callForConversation(conversationId)?.leg ?? 'caller'
+export function speakerFor(
+  participantId: string | undefined,
+  authorAddress: string | undefined,
+  conversationId: string,
+  at?: string,
+): Speaker {
+  const call = callForConversation(conversationId)
+  // After the office accepts a warm transfer, the agent side of the caller's own
+  // conversation is the office person (Real-Time Transcription on the bridged call),
+  // not the AI.
+  const transferredAt = call && getSummary(call.callSid)?.transferredAt
+  const leg = call?.leg === 'office' || (transferredAt && at && at >= transferredAt) ? 'office' : 'caller'
   const p = participantId
     ? (db.prepare('SELECT type, address FROM transcript_participants WHERE participant_id = ?').get(participantId) as
         | { type: string | null; address: string | null }

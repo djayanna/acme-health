@@ -1,7 +1,7 @@
 /**
- * Give acme-health its own Conversation Orchestrator configuration with passive VOICE
- * capture on TWILIO_PHONE_NUMBER, and move the number's capture rules off the shared
- * configuration in TWILIO_CONVERSATION_CONFIGURATION_ID.
+ * Give acme-health its own Conversation Orchestrator configuration, and move the
+ * number's VOICE capture rules off the shared configuration in
+ * TWILIO_CONVERSATION_CONFIGURATION_ID (ConversationRelay ingests the calls instead).
  *
  *   npm run create-voice-config            # show what would be created / changed
  *   npm run create-voice-config -- --apply # do it
@@ -87,19 +87,19 @@ const keptRules = (sharedVoice.captureRules ?? []).filter((r) => !isOurs(r))
 
 const newConfig = {
   displayName: DISPLAY_NAME,
-  description: `acme-health voice agent: passive VOICE capture on ${number}`,
+  description: `acme-health voice agent on ${number} (ConversationRelay ingestion)`,
   conversationGroupingType: 'GROUP_BY_PARTICIPANT_ADDRESSES',
   memoryStoreId: shared.memoryStoreId,
   memoryExtractionEnabled: shared.memoryExtractionEnabled ?? false,
   intelligenceConfigurationIds: shared.intelligenceConfigurationIds ?? [],
   channelSettings: {
     VOICE: {
-      captureRules: [
-        { from: '*', to: number, metadata: {} },
-        { from: number, to: '*', metadata: {} },
-      ],
-      // Close as soon as the final transcription event arrives (troubleshooting docs).
-      statusTimeouts: null,
+      // No capture rules: ConversationRelay creates the conversation (TAC adds
+      // conversationConfiguration to its TwiML). Rules here too = double STT per call.
+      captureRules: [],
+      // Stay open past the ConversationRelay session, so a warm transfer's
+      // <Transcription conversationId> can add the human portion; close 15 min after.
+      statusTimeouts: { inactive: 5, closed: 15 },
     },
   },
   statusCallbacks: [

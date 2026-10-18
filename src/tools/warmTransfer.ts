@@ -30,11 +30,12 @@
 
 import type { FastifyInstance } from 'fastify'
 import twilio from 'twilio'
+import type VoiceResponse from 'twilio/lib/twiml/VoiceResponse.js'
 import { createStudioHandoffTool } from 'twilio-agent-connect'
 
 import type { Tool } from '../llm/index.js'
 import { emitEvent } from '../observability.js'
-import { CallContext, publicUrl, requireTwilioSignature, studioHandoffEnabled, tac, voiceChannel } from '../tac/index.js'
+import { CallContext, orchestrated, publicUrl, requireTwilioSignature, studioHandoffEnabled, tac, voiceChannel } from '../tac/index.js'
 import { linkCalls, markTransferred } from '../transcripts/store.js'
 import { getClient } from '../twilioClient.js'
 
@@ -77,7 +78,13 @@ export function transferToHuman({ reason }: { reason: string }, ctx: CallContext
   if (!process.env.OFFICE_PHONE_NUMBER) {
     return { transferred: false, instruction: "Transfers aren't set up. Apologise and offer to take a message." }
   }
-  ctx.requestHandoff({ reasonCode: HANDOFF_REASON_CODE, reason: reason || OFFICE_FALLBACK_REASON })
+  ctx.requestHandoff({
+    reasonCode: HANDOFF_REASON_CODE,
+    reason: reason || OFFICE_FALLBACK_REASON,
+    // The Orchestrator conversation the AI portion lives in, so the human portion can
+    // be transcribed into it too. Absent in ConversationRelay-only mode.
+    ...(orchestrated && { conversationId: ctx.conversationId }),
+  })
   return { transferred: true, instruction: 'Tell the caller you are connecting them now, in one short sentence.' }
 }
 
@@ -190,6 +197,24 @@ export async function routes(app: FastifyInstance): Promise<void> {
       console.error('warmTransfer: failed to dial office', err)
       response.redirect(publicUrl('/transfer/recover'))
       return xml(response)
+    }
+
+    // Transcribe the human portion into the same conversation as the AI portion:
+    // ConversationRelay's transcription ended with the relay session, so start
+    // Real-Time Transcription on the caller's leg, routed by conversationId. Both
+    // tracks: inbound is the caller, outbound is everyone else in the conference (the
+    // office once bridged). One STT engine at a time — never both on this call.
+    // https://www.twilio.com/docs/conversations/orchestrator/concepts/ingestion
+    if (handoff.conversationId?.startsWith('conv_conversation_')) {
+      // `conversationId` is a documented <Transcription> attribute the SDK's types don't
+      // list yet; the SDK passes it through to the TwiML as-is.
+      const attributes: VoiceResponse.TranscriptionAttributes & { conversationId: string } = {
+        conversationId: handoff.conversationId,
+        track: 'both_tracks',
+        inboundTrackLabel: 'customer',
+        outboundTrackLabel: 'office',
+      }
+      response.start().transcription(attributes)
     }
 
     // Park the caller: they wait on hold until the office joins and starts the room.
