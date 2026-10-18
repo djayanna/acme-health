@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { formatDuration, keyLabel, kindOf, labelOf, summaryOf } from './events'
+import { Icon, type IconName } from './Icon'
 import { payloadOf, type Call, type CallEvent, type Line, type Speaker } from './useCallStream'
 
 const SPEAKER_LABEL: Record<Speaker, string> = {
@@ -8,6 +9,13 @@ const SPEAKER_LABEL: Record<Speaker, string> = {
   ai: 'AI agent',
   human: 'Office',
   unknown: 'Unknown',
+}
+
+const SPEAKER_ICON: Record<Speaker, IconName> = {
+  customer: 'customer',
+  ai: 'ai',
+  human: 'human',
+  unknown: 'customer',
 }
 
 /** 24-hour HH:MM:SS — fixed width, so the time column stays aligned. */
@@ -209,8 +217,12 @@ function Timeline({ call, showEvents }: { call: Call; showEvents: boolean }) {
       {rows.map((row) => {
         if (row.kind === 'transfer') {
           return (
-            <li key={`transfer-${row.at}`} className="tl-transfer">
-              <span>Office took the call · {clock(row.at)}</span>
+            <li key={`transfer-${row.at}`} className="tl-row tl-transfer speaker-human">
+              <time className="tl-time mono">{clock(row.at)}</time>
+              <span className="tl-avatar">
+                <Icon name="transfer" size={16} />
+              </span>
+              <span className="tl-transfer-label">Office took the call</span>
             </li>
           )
         }
@@ -229,7 +241,9 @@ function Timeline({ call, showEvents }: { call: Call; showEvents: boolean }) {
         return (
           <li key={line.id} className={`tl-row tl-line speaker-${line.speaker}`}>
             <time className="tl-time mono">{clock(line.at)}</time>
-            <span className="tl-node" aria-hidden="true" />
+            <span className="tl-avatar">
+              <Icon name={SPEAKER_ICON[line.speaker]} size={18} />
+            </span>
             <div className="tl-main">
               <span className="who">{SPEAKER_LABEL[line.speaker]}</span>
               <p>{line.text}</p>
@@ -256,9 +270,14 @@ export function CallView({ call }: { call: Call | undefined }) {
       <CallHeader call={call} />
       <div className="chart-tools">
         <span className="legend">
-          <span className="swatch speaker-customer" /> Caller
-          <span className="swatch speaker-ai" /> AI agent
-          <span className="swatch speaker-human" /> Office
+          {(['customer', 'ai', 'human'] as const).map((sp) => (
+            <span key={sp} className={`legend-item speaker-${sp}`}>
+              <span className="tl-avatar is-small">
+                <Icon name={SPEAKER_ICON[sp]} size={13} />
+              </span>
+              {SPEAKER_LABEL[sp]}
+            </span>
+          ))}
         </span>
         <label className="toggle">
           <input type="checkbox" checked={showEvents} onChange={(e) => setShowEvents(e.target.checked)} />

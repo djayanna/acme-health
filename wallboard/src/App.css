@@ -1,30 +1,72 @@
 /* Acme Health front desk — a call reads like a patient chart: a header strip of vital
-   signs, then one time axis with what was said (left) and what the system did (right).
+   signs, then one time axis with what was said and what the system did.
 
-   Tokens
-     ink  #14202B  page            panel #1B2A36  surfaces       rule #2C3E4D  lines
-     text #D5DEE5  body            dim   #8297A6  secondary
-     caller #E9EEF2   ai #7FB8D9 (sky)   office #E2B86B (brass)   error #E56B5D
+   Colours are Twilio Paste design tokens (@twilio-paste/design-tokens, themes `twilio`
+   and `twilio-dark`), switched by <html data-theme>:
+     body / panel / raised      → color-background-body / -weak / -strong
+     text / dim / faint         → color-text / -weak / -weaker
+     rule / rule-strong         → color-border-weaker / -weak
+     brand                      → color-background-brand-highlight (Twilio red)
+     ai                         → color-text-primary   (primary blue)
+     office                     → color-text-new       (purple)
+     error / live / warning     → color-text-error / -success / -warning
+   Twilio red is the brand mark only; errors use Paste's error red.
    Type: IBM Plex Sans (interface), IBM Plex Mono (times, SIDs, payloads). */
 
-:root {
-  --ink: #14202b;
-  --panel: #1b2a36;
-  --panel-2: #213342;
-  --rule: #2c3e4d;
-  --text: #d5dee5;
-  --dim: #8297a6;
-  --caller: #e9eef2;
-  --ai: #7fb8d9;
-  --office: #e2b86b;
-  --error: #e56b5d;
-  --live: #6fcf97;
+:root,
+[data-theme='light'] {
+  --ink: rgb(255, 255, 255);
+  --panel: rgb(249, 249, 250);
+  --panel-2: rgb(225, 227, 234);
+  --rule: rgb(225, 227, 234);
+  --rule-strong: rgb(202, 205, 216);
+  --text: rgb(18, 28, 45);
+  --dim: rgb(96, 107, 133);
+  --faint: rgb(139, 147, 170);
+  --caller: rgb(18, 28, 45);
+  --brand: rgb(242, 47, 70);
+  --ai: rgb(2, 99, 224);
+  --ai-wash: rgb(244, 249, 255);
+  --office: rgb(109, 46, 209);
+  --office-wash: rgb(245, 240, 252);
+  --error: rgb(199, 35, 35);
+  --live: rgb(20, 176, 83);
+  --warning: rgb(141, 49, 24);
+  --masthead: rgb(18, 28, 45);
+  --masthead-text: rgb(244, 244, 246);
+  --masthead-dim: rgb(136, 145, 170);
+  color-scheme: light;
+}
 
+[data-theme='dark'] {
+  --ink: rgb(13, 19, 28);
+  --panel: rgb(18, 28, 45);
+  --panel-2: rgb(31, 48, 76);
+  --rule: rgb(31, 48, 76);
+  --rule-strong: rgb(57, 71, 98);
+  --text: rgb(244, 244, 246);
+  --dim: rgb(136, 145, 170);
+  --faint: rgb(57, 71, 98);
+  --caller: rgb(244, 244, 246);
+  --brand: rgb(242, 47, 70);
+  --ai: rgb(0, 140, 255);
+  --ai-wash: rgb(18, 28, 45);
+  --office: rgb(200, 175, 240);
+  --office-wash: rgb(56, 14, 120);
+  --error: rgb(236, 91, 91);
+  --live: rgb(162, 246, 195);
+  --warning: rgb(255, 179, 122);
+  --masthead: rgb(18, 28, 45);
+  --masthead-text: rgb(244, 244, 246);
+  --masthead-dim: rgb(136, 145, 170);
+  color-scheme: dark;
+}
+
+:root {
   --sans: 'IBM Plex Sans', system-ui, sans-serif;
   --mono: 'IBM Plex Mono', ui-monospace, monospace;
   --radius: 10px;
 
-  color-scheme: dark;
   font-family: var(--sans);
   font-size: 15px;
   line-height: 1.45;
@@ -46,6 +88,9 @@ input {
 :focus-visible {
   outline: 2px solid var(--ai);
   outline-offset: 2px;
+}
+.masthead :focus-visible {
+  outline-color: rgb(0, 140, 255);
 }
 
 .mono {
@@ -83,9 +128,10 @@ input {
   display: flex;
   align-items: center;
   gap: 28px;
-  padding: 14px 24px;
-  border-bottom: 1px solid var(--rule);
-  background: var(--panel);
+  padding: 12px 24px;
+  background: var(--masthead);
+  color: var(--masthead-text);
+  border-bottom: 3px solid var(--brand);
 }
 .brand {
   display: flex;
@@ -100,15 +146,15 @@ input {
 }
 .brand-sub {
   font-weight: 400;
-  color: var(--dim);
+  color: var(--masthead-dim);
 }
-/* A cross in the clinic's sky-and-brass — AI and office, the two sides of the desk. */
+/* A clinic cross in Twilio red. */
 .brand-mark {
   width: 18px;
   height: 18px;
   background:
-    linear-gradient(var(--ai), var(--ai)) center / 6px 100% no-repeat,
-    linear-gradient(var(--office), var(--office)) center / 100% 6px no-repeat;
+    linear-gradient(var(--brand), var(--brand)) center / 6px 100% no-repeat,
+    linear-gradient(var(--brand), var(--brand)) center / 100% 6px no-repeat;
   border-radius: 2px;
 }
 .tabs {
@@ -120,15 +166,15 @@ input {
   border: 0;
   border-radius: 999px;
   background: none;
-  color: var(--dim);
+  color: var(--masthead-dim);
   cursor: pointer;
 }
 .tabs button:hover {
-  color: var(--text);
+  color: var(--masthead-text);
 }
 .tabs button[aria-pressed='true'] {
-  background: var(--panel-2);
-  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--masthead-text);
 }
 .stream {
   margin: 0 0 0 auto;
@@ -136,7 +182,21 @@ input {
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: var(--dim);
+  color: var(--masthead-dim);
+}
+.theme-toggle {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: none;
+  color: var(--masthead-text);
+  cursor: pointer;
+}
+.theme-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 .stream-dot {
   width: 8px;
@@ -145,11 +205,11 @@ input {
   background: var(--dim);
 }
 .stream-live .stream-dot {
-  background: var(--live);
-  box-shadow: 0 0 0 4px rgba(111, 207, 151, 0.15);
+  background: rgb(20, 176, 83);
+  box-shadow: 0 0 0 4px rgba(20, 176, 83, 0.22);
 }
 .stream-reconnecting .stream-dot {
-  background: var(--office);
+  background: rgb(244, 124, 34);
 }
 
 /* ---------- desk: call list + chart ---------- */
@@ -189,8 +249,9 @@ input {
   background: var(--panel);
 }
 .call-row.is-selected {
-  background: var(--panel-2);
-  border-color: var(--rule);
+  background: var(--panel);
+  border-color: var(--rule-strong);
+  box-shadow: inset 3px 0 0 var(--ai);
 }
 .call-row-top {
   display: flex;
@@ -218,6 +279,8 @@ input {
 }
 .tone-office {
   color: var(--office);
+  background: var(--office-wash);
+  border-color: transparent;
 }
 .tone-done {
   color: var(--ai);
@@ -263,7 +326,7 @@ input {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
   gap: 1px;
-  background: var(--rule);
+  background: var(--rule-strong);
   border: 1px solid var(--rule);
   border-radius: var(--radius);
   overflow: hidden;
@@ -298,13 +361,10 @@ input {
   gap: 6px 14px;
   flex-wrap: wrap;
 }
-.swatch {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  margin-right: -8px;
-  background: var(--speaker, var(--dim));
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .toggle {
   display: flex;
@@ -318,16 +378,24 @@ input {
 
 /* ---------- the timeline (signature) ---------- */
 .speaker-customer {
-  --speaker: var(--caller);
+  --speaker: var(--panel-2);
+  --speaker-on: var(--text);
+  --speaker-label: var(--text);
 }
 .speaker-ai {
   --speaker: var(--ai);
+  --speaker-on: var(--ink);
+  --speaker-label: var(--ai);
 }
 .speaker-human {
   --speaker: var(--office);
+  --speaker-on: var(--ink);
+  --speaker-label: var(--office);
 }
 .speaker-unknown {
-  --speaker: var(--dim);
+  --speaker: var(--rule-strong);
+  --speaker-on: var(--text);
+  --speaker-label: var(--dim);
 }
 
 .timeline {
@@ -342,7 +410,7 @@ input {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: calc(76px + 6px);
+  left: calc(76px + 12px + 6px);
   width: 2px;
   background: var(--rule);
 }
@@ -353,7 +421,10 @@ input {
   white-space: normal;
   gap: 0 12px;
   align-items: start;
-  padding: 7px 0;
+  padding: 8px 0;
+}
+.tl-line .tl-time {
+  padding-top: 5px;
 }
 .tl-time {
   padding-top: 3px;
@@ -370,6 +441,30 @@ input {
   background: var(--ink);
   border: 2px solid var(--speaker, var(--rule));
 }
+/* Who's speaking: a Paste icon in a badge sitting on the rail. */
+.tl-avatar {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-left: -6px;
+  border-radius: 50%;
+  color: var(--speaker-on, var(--ink));
+  background: var(--speaker);
+  box-shadow: 0 0 0 3px var(--ink);
+}
+.tl-avatar.is-small {
+  width: 18px;
+  height: 18px;
+  margin-left: 0;
+  box-shadow: none;
+}
+.icon {
+  display: block;
+  flex: none;
+}
 
 /* Words: the main column. */
 .tl-main {
@@ -379,7 +474,7 @@ input {
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: var(--speaker);
+  color: var(--speaker-label);
 }
 .tl-main p {
   margin: 1px 0 0;
@@ -390,10 +485,7 @@ input {
 .speaker-human .tl-main p {
   color: var(--text);
 }
-.speaker-ai .tl-node,
-.speaker-human .tl-node {
-  background: var(--speaker);
-}
+
 
 /* System events: indented, narrower and quieter than the words. */
 .tl-event {
@@ -533,11 +625,16 @@ input {
   border-left: 1px solid var(--rule);
 }
 
-/* The handoff: one brass rule across the axis. */
+/* The handoff: a stop on the rail, then a rule across the page in the office's colour. */
 .tl-transfer {
-  position: relative;
-  margin: 14px 0;
-  padding-left: calc(76px + 26px);
+  margin: 10px 0;
+  align-items: center;
+}
+.tl-transfer .tl-time {
+  padding-top: 0;
+  color: var(--office);
+}
+.tl-transfer-label {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -547,7 +644,7 @@ input {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
-.tl-transfer::after {
+.tl-transfer-label::after {
   content: '';
   flex: 1;
   height: 1px;
@@ -639,11 +736,9 @@ input {
     grid-template-columns: 58px 14px 1fr;
   }
   .timeline::before {
-    left: calc(58px + 6px);
+    left: calc(58px + 12px + 6px);
   }
-  .tl-transfer {
-    padding-left: calc(58px + 26px);
-  }
+
   .tl-side {
     margin-left: 0;
   }

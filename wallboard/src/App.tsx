@@ -2,6 +2,8 @@ import { useState } from 'react'
 
 import { CallList, CallView } from './CallView'
 import { EventLog } from './EventLog'
+import { Icon } from './Icon'
+import { useTheme } from './useTheme'
 import { useCallStream, type StreamState } from './useCallStream'
 
 const STREAM_LABEL: Record<StreamState, string> = {
@@ -14,6 +16,7 @@ type Tab = 'calls' | 'log'
 
 export function App() {
   const { calls, liveEvents, state } = useCallStream()
+  const { theme, toggle: toggleTheme } = useTheme()
   const [tab, setTab] = useState<Tab>('calls')
   const [selectedSid, setSelectedSid] = useState<string>()
   // Follow the newest call until someone picks one.
@@ -47,6 +50,14 @@ export function App() {
           {STREAM_LABEL[state]}
           {live > 0 && <span className="mono"> · {live} on the line</span>}
         </p>
+        <button
+          className="theme-toggle"
+          onClick={toggleTheme}
+          aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+        >
+          <Icon name={theme === 'dark' ? 'light' : 'dark'} size={18} />
+        </button>
       </header>
 
       {tab === 'calls' ? (
