@@ -20,11 +20,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import twilio from 'twilio'
 
-import { emitEvent } from '../observability.js'
+import { emitEvent, onEvent } from '../observability.js'
 import { publicUrl, tac } from '../tac/index.js'
 import {
   addLine,
   callForConversation,
+  callForSid,
   endCall,
   recentCalls,
   speakerFor,
@@ -84,6 +85,16 @@ function handleCommunication(data: Record<string, any>, at: string): void {
     speaker: speakerFor(data.author?.participantId, data.author?.address, data.conversationId, lineAt),
     text: content.text.trim(),
   })
+}
+
+/**
+ * The caller Call SID an event belongs to. An office-leg SID maps to its caller; any
+ * other Call SID is a caller's own — even before its transcript row exists (the agent's
+ * first events come before Orchestrator's first webhook).
+ */
+function callOfEvent(correlationId: string | null): string | null {
+  if (!correlationId?.startsWith('CA')) return null
+  return callForSid(correlationId) ?? correlationId
 }
 
 /** Reject requests that didn't come from this machine — transcripts can hold PHI. */
@@ -148,10 +159,15 @@ export async function routes(app: FastifyInstance): Promise<void> {
 
     send('snapshot', recentCalls())
     const unsubscribe = subscribe((e) => send(e.type, e.type === 'call' ? e.call : e.line))
+    // Each new event, tagged with the call it belongs to (null when it isn't a call's).
+    const unsubscribeEvents = onEvent((event) =>
+      send('event', { ...event, callSid: callOfEvent(event.correlation_id) }),
+    )
     const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS)
     req.raw.on('close', () => {
       clearInterval(heartbeat)
       unsubscribe()
+      unsubscribeEvents()
     })
   })
 }

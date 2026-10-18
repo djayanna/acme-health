@@ -38,8 +38,11 @@ export interface EventRow {
 /** The surface every events backend implements. */
 export interface Store {
   init(): void
-  record(event: EventRow): void
+  /** Store one event; returns its id. */
+  record(event: EventRow): number
   recent(limit: number): Record<string, unknown>[]
+  /** Events whose correlation id is one of `ids`, oldest first. */
+  forCorrelation(ids: string[], limit: number): Record<string, unknown>[]
 }
 
 const CREATE_EVENTS = `
@@ -66,13 +69,15 @@ class SqliteStore implements Store {
     this.db.exec(CREATE_EVENTS)
   }
 
-  record(event: EventRow): void {
-    this.db
-      .prepare(
-        'INSERT INTO events (ts, component, method, event_type, correlation_id, status, payload_json) ' +
-          'VALUES (@ts, @component, @method, @event_type, @correlation_id, @status, @payload_json)',
-      )
-      .run(event)
+  record(event: EventRow): number {
+    return Number(
+      this.db
+        .prepare(
+          'INSERT INTO events (ts, component, method, event_type, correlation_id, status, payload_json) ' +
+            'VALUES (@ts, @component, @method, @event_type, @correlation_id, @status, @payload_json)',
+        )
+        .run(event).lastInsertRowid,
+    )
   }
 
   recent(limit: number): Record<string, unknown>[] {
@@ -82,6 +87,16 @@ class SqliteStore implements Store {
           'FROM events ORDER BY id DESC LIMIT ?',
       )
       .all(limit) as Record<string, unknown>[]
+  }
+
+  forCorrelation(ids: string[], limit: number): Record<string, unknown>[] {
+    if (!ids.length) return []
+    return this.db
+      .prepare(
+        'SELECT id, ts, component, method, event_type, correlation_id, status, payload_json ' +
+          `FROM events WHERE correlation_id IN (${ids.map(() => '?').join(',')}) ORDER BY id LIMIT ?`,
+      )
+      .all(...ids, limit) as Record<string, unknown>[]
   }
 }
 
@@ -107,6 +122,23 @@ export interface EmitOptions {
   payload?: unknown
 }
 
+/** A stored event, as `GET /events` returns it and live listeners receive it. */
+export type StoredEvent = EventRow & { id: number }
+
+type EventListener = (event: StoredEvent) => void
+const eventListeners = new Set<EventListener>()
+
+/** Get every event as it's recorded (the wallboard's live stream). */
+export function onEvent(listener: EventListener): () => void {
+  eventListeners.add(listener)
+  return () => eventListeners.delete(listener)
+}
+
+/** Events tied to a call — `ids` is its Call SID plus any linked leg's. */
+export function eventsFor(ids: string[], limit = 500): Record<string, unknown>[] {
+  return store.forCorrelation(ids, limit)
+}
+
 /** Record one event. Never throws — telemetry must not break a Twilio call. */
 export function emitEvent(
   component: string,
@@ -115,7 +147,7 @@ export function emitEvent(
   options: EmitOptions = {},
 ): void {
   try {
-    store.record({
+    const row: EventRow = {
       ts: new Date().toISOString(),
       component,
       method,
@@ -123,7 +155,15 @@ export function emitEvent(
       correlation_id: options.correlationId ?? null,
       status: options.status ?? 'success',
       payload_json: options.payload !== undefined ? JSON.stringify(options.payload) : null,
-    })
+    }
+    const id = store.record(row)
+    for (const listener of eventListeners) {
+      try {
+        listener({ ...row, id })
+      } catch (err) {
+        console.error('emitEvent: listener failed', err)
+      }
+    }
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error(`emitEvent failed for ${component}.${method}`, err)

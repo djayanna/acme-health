@@ -137,7 +137,7 @@ export async function beginTransfer(conference: string): Promise<string> {
 }
 
 /** Move the parked caller out of hold to the recovery prompt — at most once per transfer. */
-async function recoverCaller(conference: string): Promise<void> {
+async function recoverCaller(conference: string, why: string): Promise<void> {
   const pending = PENDING.get(conference)
   if (!pending || pending.recovered || pending.bridged) return
   pending.recovered = true
@@ -146,10 +146,14 @@ async function recoverCaller(conference: string): Promise<void> {
     await getClient()
       .calls(pending.callerSid)
       .update({ url: publicUrl('/transfer/recover'), method: 'POST' })
-    emitEvent('warmTransfer', 'recoverCaller', 'success', { correlationId: pending.callerSid })
+    emitEvent('warmTransfer', 'recoverCaller', 'success', { correlationId: pending.callerSid, payload: { why } })
   } catch (err) {
     // The caller already hung up — nothing to recover.
-    emitEvent('warmTransfer', 'recoverCaller', 'error', { correlationId: pending.callerSid, status: 'error' })
+    emitEvent('warmTransfer', 'recoverCaller', 'error', {
+      correlationId: pending.callerSid,
+      status: 'error',
+      payload: { why, error: 'caller already hung up' },
+    })
     console.warn('warmTransfer: could not redirect caller', err instanceof Error ? err.message : err)
   } finally {
     PENDING.delete(conference)
@@ -189,11 +193,18 @@ export async function routes(app: FastifyInstance): Promise<void> {
       // The office leg is its own captured conversation; file it under this caller's
       // transcript so the human portion shows on the same call.
       linkCalls(callerSid, officeSid)
-      emitEvent('warmTransfer', 'beginTransfer', 'success', { correlationId: callerSid })
+      emitEvent('warmTransfer', 'beginTransfer', 'success', {
+        correlationId: callerSid,
+        payload: { officeCallSid: officeSid, reason: handoff.reason ?? null, transcribingHumanLeg: Boolean(handoff.conversationId) },
+      })
     } catch (err) {
       // Couldn't even place the office leg — tell the caller now instead of parking them.
       PENDING.delete(conference)
-      emitEvent('warmTransfer', 'beginTransfer', 'error', { correlationId: callerSid, status: 'error' })
+      emitEvent('warmTransfer', 'beginTransfer', 'error', {
+        correlationId: callerSid,
+        status: 'error',
+        payload: { error: err instanceof Error ? err.message.slice(0, 160) : String(err) },
+      })
       console.error('warmTransfer: failed to dial office', err)
       response.redirect(publicUrl('/transfer/recover'))
       return xml(response)
@@ -256,13 +267,14 @@ export async function routes(app: FastifyInstance): Promise<void> {
       pending.bridged = true
       PENDING.delete(conference)
       markTransferred(pending.callerSid)
+      emitEvent('warmTransfer', 'officeAccepted', 'success', { correlationId: pending.callerSid })
       response
         .dial()
         .conference({ startConferenceOnEnter: true, endConferenceOnExit: true, beep: 'false' }, conference)
       return xml(response)
     }
 
-    await recoverCaller(conference)
+    await recoverCaller(conference, req.query.decline ? 'office did not answer the prompt' : 'office declined')
     response.say(pending ? 'No problem — goodbye.' : 'The caller is no longer waiting. Goodbye.')
     response.hangup()
     return xml(response)
@@ -271,7 +283,7 @@ export async function routes(app: FastifyInstance): Promise<void> {
   app.post<{ Body: Form; Querystring: Query }>('/transfer/office-status', signed, async (req, reply) => {
     // Office leg finished. If it never bridged (busy, no-answer, failed, canceled, or
     // answered and hung up before pressing 1), bring the caller back.
-    await recoverCaller(String(req.query.conference ?? ''))
+    await recoverCaller(String(req.query.conference ?? ''), `office call ${req.body?.CallStatus ?? 'ended'}`)
     reply.code(204)
     return ''
   })
@@ -283,7 +295,7 @@ export async function routes(app: FastifyInstance): Promise<void> {
     const answeredBy = String(req.body?.AnsweredBy ?? '')
     const officeCallSid = String(req.body?.CallSid ?? '')
     if (answeredBy.startsWith('machine') || answeredBy === 'fax') {
-      await recoverCaller(conference)
+      await recoverCaller(conference, `office answered by ${answeredBy}`)
       if (officeCallSid) {
         await getClient()
           .calls(officeCallSid)

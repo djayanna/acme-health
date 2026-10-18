@@ -16,6 +16,8 @@
 
 import Database from 'better-sqlite3'
 
+import { eventsFor } from '../observability.js'
+
 export type Speaker = 'customer' | 'ai' | 'human' | 'unknown'
 
 export interface Line {
@@ -29,6 +31,8 @@ export interface Line {
 
 export interface CallSummary {
   callSid: string
+  /** The warm-transfer office leg, if there was one. */
+  officeCallSid: string | null
   from: string | null
   startedAt: string
   endedAt: string | null
@@ -37,6 +41,8 @@ export interface CallSummary {
 
 export interface CallTranscript extends CallSummary {
   lines: Line[]
+  /** Events (`src/observability.ts`) correlated with this call, oldest first. */
+  events: Record<string, unknown>[]
 }
 
 export type TranscriptEvent = { type: 'call'; call: CallSummary } | { type: 'line'; line: Line }
@@ -76,6 +82,11 @@ CREATE TABLE IF NOT EXISTS transcript_lines (
 );
 CREATE INDEX IF NOT EXISTS transcript_lines_call ON transcript_lines (call_sid, at);
 `)
+// Added after the first release: the warm-transfer office leg's Call SID, so the call's
+// events (correlated by either SID) can be found after a restart.
+if (!(db.prepare('PRAGMA table_info(transcript_calls)').all() as { name: string }[]).some((c) => c.name === 'office_call_sid')) {
+  db.exec('ALTER TABLE transcript_calls ADD COLUMN office_call_sid TEXT')
+}
 
 // Office legs are linked before Orchestrator reports their conversation: office Call
 // SID → caller Call SID.
@@ -127,6 +138,7 @@ function publish(event: TranscriptEvent): void {
 function toSummary(row: Record<string, string | null>): CallSummary {
   return {
     callSid: row.call_sid!,
+    officeCallSid: row.office_call_sid,
     from: row.from_address,
     startedAt: row.started_at!,
     endedAt: row.ended_at,
@@ -149,7 +161,19 @@ export function recentCalls(limit = RECENT_CALLS): CallTranscript[] {
   const lines = db.prepare(
     'SELECT id, call_sid AS callSid, conversation_id AS conversationId, at, speaker, text FROM transcript_lines WHERE call_sid = ? ORDER BY at',
   )
-  return rows.map((row) => ({ ...toSummary(row), lines: lines.all(row.call_sid) as Line[] }))
+  return rows.map((row) => ({
+    ...toSummary(row),
+    lines: lines.all(row.call_sid) as Line[],
+    events: eventsFor([row.call_sid, row.office_call_sid].filter((sid): sid is string => Boolean(sid))),
+  }))
+}
+
+/** The caller Call SID a correlation id (caller or office-leg SID) belongs to, if tracked. */
+export function callForSid(sid: string): string | undefined {
+  const row = db
+    .prepare('SELECT call_sid FROM transcript_calls WHERE call_sid = ? OR office_call_sid = ?')
+    .get(sid, sid) as { call_sid: string } | undefined
+  return row?.call_sid ?? pendingOfficeLegs.get(sid)
 }
 
 /** The call a conversation belongs to, if we're tracking it. */
@@ -266,6 +290,10 @@ export function endCall(callSid: string, at: string): void {
 /** Warm transfer started: the office leg's conversation belongs to the caller's transcript. */
 export function linkCalls(callerSid: string, officeSid: string): void {
   pendingOfficeLegs.set(officeSid, callerSid)
+  const changed = db
+    .prepare('UPDATE transcript_calls SET office_call_sid = ? WHERE call_sid = ?')
+    .run(officeSid, callerSid).changes
+  if (changed) publish({ type: 'call', call: getSummary(callerSid)! })
   // Forget the link once its conversation could no longer appear.
   setTimeout(() => pendingOfficeLegs.delete(officeSid), 30 * 60_000).unref()
 }

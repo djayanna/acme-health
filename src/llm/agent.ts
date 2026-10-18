@@ -53,23 +53,56 @@ export interface TurnOptions {
    * then gets one last reply with tools disabled (its "connecting you now").
    */
   wrapUp?: () => boolean
+  /** Called after each tool run with a summary safe to log (no arguments or results). */
+  onToolCall?: (summary: ToolCallSummary) => void
+}
+
+/**
+ * What a tool call did, without its arguments or full result — those can hold PHI
+ * (names, dates of birth). `outcome` is the result's own top-level flags only.
+ */
+export interface ToolCallSummary {
+  tool: string
+  ok: boolean
+  durationMs: number
+  outcome: Record<string, boolean | number | string | null>
+  error?: string
 }
 
 /** Per-turn values the agent's tools and middleware read from `runtime.context`. */
 interface TurnContext {
   ctx: unknown
   wrapUp?: () => boolean
+  onToolCall?: (summary: ToolCallSummary) => void
+}
+
+/** Top-level booleans, numbers and short status strings from a tool result — nothing nested. */
+function outcomeOf(result: unknown): ToolCallSummary['outcome'] {
+  if (!result || typeof result !== 'object') return {}
+  const out: ToolCallSummary['outcome'] = {}
+  for (const [key, value] of Object.entries(result)) {
+    if (typeof value === 'boolean' || typeof value === 'number' || value === null) out[key] = value
+    else if (Array.isArray(value)) out[`${key}Count`] = value.length
+    else if (key === 'error' && typeof value === 'string') out.error = value.slice(0, 120)
+  }
+  return out
 }
 
 /** Wrap a provider-neutral `Tool` as a LangChain tool that gets `ctx` from the runtime. */
 function toLangChainTool(t: Tool): StructuredToolInterface {
   return langchainTool(
     async (args: unknown, config) => {
-      const { ctx } = (config as { context?: TurnContext }).context ?? ({} as TurnContext)
+      const { ctx, onToolCall } = (config as { context?: TurnContext }).context ?? ({} as TurnContext)
+      const started = Date.now()
       try {
-        return JSON.stringify((await t.run(args, ctx)) ?? {})
+        const result = (await t.run(args, ctx)) ?? {}
+        const outcome = outcomeOf(result)
+        onToolCall?.({ tool: t.name, ok: !('error' in outcome), durationMs: Date.now() - started, outcome })
+        return JSON.stringify(result)
       } catch (err) {
-        return JSON.stringify({ error: err instanceof Error ? err.message : String(err) })
+        const error = err instanceof Error ? err.message : String(err)
+        onToolCall?.({ tool: t.name, ok: false, durationMs: Date.now() - started, outcome: {}, error: error.slice(0, 120) })
+        return JSON.stringify({ error })
       }
     },
     {
@@ -138,7 +171,7 @@ export async function* runTurn<Ctx = unknown>(
   system: string,
   tools: Tool<Ctx>[],
   ctx: Ctx,
-  { signal, wrapUp }: TurnOptions = {},
+  { signal, wrapUp, onToolCall }: TurnOptions = {},
 ): AsyncGenerator<string> {
   const agent = await agentFor(system, tools as Tool[])
   let spoken = ''
@@ -152,7 +185,7 @@ export async function* runTurn<Ctx = unknown>(
       { messages: [...history] },
       {
         streamMode: ['messages', 'updates'],
-        context: { ctx, wrapUp } satisfies TurnContext,
+        context: { ctx, wrapUp, onToolCall } satisfies TurnContext,
         recursionLimit: RECURSION_LIMIT,
         signal,
       } as never,

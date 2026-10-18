@@ -39,6 +39,7 @@ erDiagram
         TEXT started_at "ISO 8601, NOT NULL"
         TEXT ended_at "conversation INACTIVE/CLOSED"
         TEXT transferred_at "office pressed 1"
+        TEXT office_call_sid "warm-transfer office leg"
     }
 
     transcript_conversations {
@@ -82,7 +83,7 @@ Audit log of what the app's Twilio integrations do. One row per instrumented ste
 | `event_type` | TEXT | yes | `start`, `success` or `error` |
 | `correlation_id` | TEXT | yes | Ties one interaction's events together; usually the Call SID |
 | `status` | TEXT | yes | `success` or `error` |
-| `payload_json` | TEXT | yes | Optional JSON details |
+| `payload_json` | TEXT | yes | JSON details — see Event payloads below |
 
 ### `transcript_calls`
 
@@ -95,6 +96,7 @@ One row per call, keyed by the **caller's** Call SID.
 | `started_at` | TEXT | no | First communication seen |
 | `ended_at` | TEXT | yes | Set when the caller's conversation goes `INACTIVE` or `CLOSED` |
 | `transferred_at` | TEXT | yes | Set when the office presses 1 on a warm transfer |
+| `office_call_sid` | TEXT | yes | The office leg's Call SID, so the call's events (correlated by either SID) are found after a restart. Added by migration on startup |
 
 ### `transcript_conversations`
 
@@ -135,6 +137,22 @@ One row per transcribed utterance.
 | `text` | TEXT | no | The utterance |
 
 **Index:** `transcript_lines_call (call_sid, at)` loads one call's transcript in order.
+
+## Event payloads
+
+Payloads describe what happened and how long it took. They never carry what a caller said
+(that's in `transcript_lines`) or tool arguments such as names and dates of birth.
+
+| `component.method` | Payload fields |
+| --- | --- |
+| `voiceAgent.callStarted` | `mode`, `conversationId`, `memory` (`loaded`/`none`), `model` |
+| `agent.turn` | `durationMs`, `replyChars`, `interrupted` |
+| `agent.toolCall` | `tool`, `ok`, `durationMs`, `outcome` (result's booleans/numbers; lists as `…Count`), `error` |
+| `voiceAgent.handoff` | `target` (`warm-transfer`/`studio`), `reasonCode`, `reason` |
+| `voiceAgent.callEnded` | `durationSec` (AI session only), `turns`, `verified`, `handedOff` |
+| `warmTransfer.beginTransfer` | `officeCallSid`, `reason`, `transcribingHumanLeg` — or `error` |
+| `warmTransfer.officeAccepted` | none |
+| `warmTransfer.recoverCaller` | `why` (e.g. `office call no-answer`), `error` |
 
 ## Speaker mapping
 

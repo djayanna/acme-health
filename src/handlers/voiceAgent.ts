@@ -20,10 +20,10 @@
 import type { FastifyInstance } from 'fastify'
 import { MemoryPromptBuilder, type ConversationId } from 'twilio-agent-connect'
 
-import { runTurn, userMessage, type Message, type Tool } from '../llm/index.js'
+import { modelSpec, runTurn, userMessage, type Message, type Tool } from '../llm/index.js'
 import { emitEvent } from '../observability.js'
 import { SYSTEM_PROMPT } from '../prompts/voiceAgent.js'
-import { CallContext, tac, voiceChannel } from '../tac/index.js'
+import { CallContext, orchestrated, studioHandoffEnabled, tac, voiceChannel } from '../tac/index.js'
 import { SHARED_TOOLS } from '../tools/index.js'
 import { TOOLS as KNOWLEDGE_TOOLS } from '../tools/knowledge.js'
 import { TOOLS as SCHEDULING_TOOLS } from '../tools/scheduling.js'
@@ -46,6 +46,8 @@ interface Call {
   ctx: CallContext
   system: string
   history: Message[]
+  /** Set once `callEnded` is recorded. */
+  ended?: boolean
 }
 
 const CALLS = new Map<string, Call>()
@@ -77,17 +79,35 @@ tac.onMessageReady(async ({ conversationId, message, memory, session, channel, a
       history: [],
     }
     CALLS.set(conversationId, call)
-    emitEvent('voiceAgent', 'callStarted', 'start', { correlationId: session.callSid ?? conversationId })
+    emitEvent('voiceAgent', 'callStarted', 'start', {
+      correlationId: session.callSid ?? conversationId,
+      payload: {
+        mode: orchestrated ? 'orchestrated' : 'relay-only',
+        conversationId: orchestrated ? conversationId : null,
+        memory: memory ? 'loaded' : 'none',
+        model: modelSpec().model,
+      },
+    })
   }
   const { ctx } = call
   if (ctx.handedOff) return
 
   call.history.push(userMessage(message))
+  const startedAt = Date.now()
   const reply = runTurn(call.history, call.system, TOOLS, ctx, {
     signal: abortSignal,
     wrapUp: () => ctx.handedOff,
+    onToolCall: (tool) => emitEvent('agent', 'toolCall', tool.ok ? 'success' : 'error', {
+      correlationId: session.callSid ?? conversationId,
+      status: tool.ok ? 'success' : 'error',
+      payload: tool,
+    }),
   })
-  await voiceChannel.sendStreamingResponse(conversationId, reply, abortSignal ? { signal: abortSignal } : {})
+  const spoken = await voiceChannel.sendStreamingResponse(conversationId, reply, abortSignal ? { signal: abortSignal } : {})
+  emitEvent('agent', 'turn', abortSignal?.aborted ? 'interrupted' : 'success', {
+    correlationId: session.callSid ?? conversationId,
+    payload: { durationMs: Date.now() - startedAt, replyChars: spoken.length, interrupted: Boolean(abortSignal?.aborted) },
+  })
 
   sendPendingHandoff(conversationId, ctx)
   // Returning nothing: the reply has already been streamed.
@@ -106,18 +126,41 @@ function sendPendingHandoff(conversationId: ConversationId, ctx: CallContext): v
   ws.send(JSON.stringify(pending))
   delete ctx.session.pendingHandoffData
   ctx.markHandoffSent()
-  emitEvent('voiceAgent', 'handoff', 'success', { correlationId: ctx.session.callSid ?? conversationId })
+  const data = JSON.parse(pending.handoffData) as Record<string, unknown>
+  emitEvent('voiceAgent', 'handoff', 'success', {
+    correlationId: ctx.session.callSid ?? conversationId,
+    payload: { target: studioHandoffEnabled ? 'studio' : 'warm-transfer', reasonCode: data.reasonCode ?? null, reason: data.reason ?? null },
+  })
 }
 
-tac.onConversationEnded(({ session }) => {
-  CALLS.delete(session.conversationId)
-  emitEvent('voiceAgent', 'callEnded', 'success', { correlationId: session.callSid ?? session.conversationId })
+/** The call's stats for `callEnded`, taken once — before its state is dropped. */
+function endCall(conversationId: string, callSid: string | undefined, startedAt: Date): void {
+  const call = CALLS.get(conversationId)
+  if (!call || call.ended) return
+  call.ended = true
+  emitEvent('voiceAgent', 'callEnded', 'success', {
+    correlationId: callSid ?? conversationId,
+    payload: {
+      durationSec: Math.round((Date.now() - startedAt.getTime()) / 1000),
+      turns: call.history.filter((m) => m.getType() === 'human').length,
+      verified: Boolean(call.ctx.verifiedPatientId),
+      handedOff: call.ctx.handedOff,
+    },
+  })
+}
+
+// The WebSocket closes first in both modes; orchestrated mode keeps TAC's session until
+// Conversation Orchestrator closes it, which can be well after hang-up. Record the end
+// here and drop per-call agent state.
+voiceChannel.on('webSocketDisconnected', ({ conversationId }: { conversationId: string }) => {
+  const call = CALLS.get(conversationId)
+  if (call) endCall(conversationId, call.ctx.session.callSid, call.ctx.session.startedAt)
+  CALLS.delete(conversationId)
 })
 
-// Orchestrated mode keeps a session until Conversation Orchestrator closes it, which can
-// be well after hang-up; per-call agent state isn't needed past the WebSocket.
-voiceChannel.on('webSocketDisconnected', ({ conversationId }: { conversationId: string }) => {
-  CALLS.delete(conversationId)
+tac.onConversationEnded(({ session }) => {
+  endCall(session.conversationId, session.callSid, session.startedAt)
+  CALLS.delete(session.conversationId)
 })
 
 /** TAC owns the voice routes (/twiml, the WebSocket, the relay callback). */
