@@ -126,7 +126,7 @@ npm run upload-knowledge -- --apply # uploads the FAQ to TWILIO_KNOWLEDGE_BASE_I
 ## Sample data
 
 Patients for caller verification are in `src/data/patients.ts` — e.g. say you're
-**Jamie Sample, born April 12 1985**. All of it is invented.
+**John Smith, born March 15 1980** (or Jamie Sample, born April 12 1985). All of it is invented.
 
 ## Events (§6)
 
@@ -162,7 +162,7 @@ contain PHI. Set `TAC_ANALYTICS_DISABLED=true` if your policy requires it.
 1. **Confirm the app boots** — `./run.sh` and `curl :8080/health`.
 2. **Show the layering** — `src/tac/` (TAC wiring), then `src/handlers/` (the agent's
    callbacks), `src/prompts/` and `src/tools/`.
-3. **Call the number** — ask about parking, then book an appointment as Jamie Sample.
+3. **Call the number** — ask about parking, then book an appointment as John Smith.
 4. **Ask for a person** — watch the warm transfer dial the office.
 5. **Open the wallboard** at http://localhost:5175 and click **Refresh** to watch
    events stream in.

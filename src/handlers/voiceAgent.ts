@@ -22,6 +22,7 @@ import { MemoryPromptBuilder, type ConversationId } from 'twilio-agent-connect'
 
 import { modelSpec, runTurn, userMessage, type Message, type Tool } from '../llm/index.js'
 import { emitEvent } from '../observability.js'
+import { nowLine } from '../prompts/clock.js'
 import { SYSTEM_PROMPT } from '../prompts/voiceAgent.js'
 import { CallContext, orchestrated, studioHandoffEnabled, tac, voiceChannel } from '../tac/index.js'
 import { SHARED_TOOLS } from '../tools/index.js'
@@ -75,7 +76,8 @@ tac.onMessageReady(async ({ conversationId, message, memory, session, channel, a
   if (!call) {
     call = {
       ctx: new CallContext(session),
-      system: MemoryPromptBuilder.compose(SYSTEM_PROMPT, memory, session),
+      // Today's date and time, fixed for the call (the prompt can't change mid-call).
+      system: MemoryPromptBuilder.compose(`${SYSTEM_PROMPT}\n\n${nowLine()}`, memory, session),
       history: [],
     }
     CALLS.set(conversationId, call)
