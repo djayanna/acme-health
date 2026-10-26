@@ -8,3 +8,4 @@ events.db
 events.db-journal
 events.db-wal
 events.db-shm
+events.backup*.db

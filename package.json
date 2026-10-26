@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "add-status-callback": "tsx scripts/add-status-callback.ts",
     "create-voice-config": "tsx scripts/create-voice-config.ts",
-    "upload-knowledge": "tsx scripts/upload-knowledge.ts"
+    "upload-knowledge": "tsx scripts/upload-knowledge.ts",
+    "repair-transcripts": "tsx scripts/repair-transcripts.ts"
   },
   "dependencies": {
     "@fastify/formbody": "^8.0.2",

@@ -190,19 +190,27 @@ export function callForConversation(conversationId: string): { callSid: string; 
  * Attach an Orchestrator conversation to a call. `channelCallSid` is the Call SID the
  * conversation's voice traffic is on: the caller's own call, or a linked office leg.
  */
-export function trackConversation(conversationId: string, channelCallSid: string, at: string): void {
-  if (callForConversation(conversationId)) return
-  const callerSid = pendingOfficeLegs.get(channelCallSid)
+export function trackConversation(conversationId: string, channelCallSid: string, at: string): string {
+  // One Orchestrator conversation can span several calls: within its voice timeout a
+  // repeat call from the same number reuses it. So the call comes from the line's own
+  // Call SID (an office leg maps to its caller), never from the conversation.
+  const callerSid = pendingOfficeLegs.get(channelCallSid) ?? officeLegOf(channelCallSid)
   const callSid = callerSid ?? channelCallSid
   const leg = callerSid ? 'office' : 'caller'
-  db.prepare('INSERT OR IGNORE INTO transcript_conversations (conversation_id, call_sid, leg) VALUES (?, ?, ?)').run(
-    conversationId,
-    callSid,
-    leg,
-  )
-  db.prepare('INSERT OR IGNORE INTO transcript_calls (call_sid, started_at) VALUES (?, ?)').run(callSid, at)
 
-  // The caller's number may have arrived (on a participant) before we knew the call.
+  // The conversation's most recent call — used for participant lookups and lifecycle.
+  db.prepare(
+    `INSERT INTO transcript_conversations (conversation_id, call_sid, leg) VALUES (?, ?, ?)
+     ON CONFLICT(conversation_id) DO UPDATE SET call_sid = excluded.call_sid, leg = excluded.leg`,
+  ).run(conversationId, callSid, leg)
+
+  const created = db
+    .prepare('INSERT OR IGNORE INTO transcript_calls (call_sid, started_at) VALUES (?, ?)')
+    .run(callSid, at).changes
+  if (!created) return callSid
+
+  // A new call: take the caller's number from the conversation's customer participant,
+  // which may have arrived on an earlier call in the same conversation.
   if (leg === 'caller') {
     const customer = db
       .prepare("SELECT address FROM transcript_participants WHERE conversation_id = ? AND type = 'CUSTOMER' AND address IS NOT NULL")
@@ -212,6 +220,22 @@ export function trackConversation(conversationId: string, channelCallSid: string
     }
   }
   publish({ type: 'call', call: getSummary(callSid)! })
+  return callSid
+}
+
+/** The caller a persisted office-leg Call SID belongs to (survives restarts). */
+function officeLegOf(sid: string): string | undefined {
+  return (db.prepare('SELECT call_sid FROM transcript_calls WHERE office_call_sid = ?').get(sid) as { call_sid: string } | undefined)
+    ?.call_sid
+}
+
+/** Calls whose lines are in a conversation (it can span several calls). */
+export function callsInConversation(conversationId: string): string[] {
+  return (
+    db.prepare('SELECT DISTINCT call_sid FROM transcript_lines WHERE conversation_id = ?').all(conversationId) as {
+      call_sid: string
+    }[]
+  ).map((r) => r.call_sid)
 }
 
 /** Record a participant's type and address (used to label lines). */
@@ -237,8 +261,10 @@ export function speakerFor(
   authorAddress: string | undefined,
   conversationId: string,
   at?: string,
+  callSid?: string,
 ): Speaker {
-  const call = callForConversation(conversationId)
+  const conv = callForConversation(conversationId)
+  const call = callSid ? { callSid, leg: conv?.callSid === callSid ? conv.leg : 'caller' } : conv
   // After the office accepts a warm transfer, the agent side of the caller's own
   // conversation is the office person (Real-Time Transcription on the bridged call),
   // not the AI.

@@ -24,8 +24,8 @@ import { emitEvent, onEvent } from '../observability.js'
 import { publicUrl, tac } from '../tac/index.js'
 import {
   addLine,
-  callForConversation,
   callForSid,
+  callsInConversation,
   endCall,
   recentCalls,
   speakerFor,
@@ -54,9 +54,10 @@ function handleConversation(data: Record<string, any>, at: string): void {
   // Voice timeouts keep the conversation open a few minutes after hang-up (so a warm
   // transfer can continue it); INACTIVE is the first sign the call is over.
   if (data.status !== 'CLOSED' && data.status !== 'INACTIVE') return
-  const call = callForConversation(data.id)
-  if (!call) closedBeforeTracked.add(data.id)
-  else if (call.leg === 'caller') endCall(call.callSid, data.updatedAt ?? at)
+  const calls = callsInConversation(data.id)
+  if (!calls.length) closedBeforeTracked.add(data.id)
+  // Every call in the conversation is over once it goes INACTIVE/CLOSED.
+  for (const sid of calls) endCall(sid, data.updatedAt ?? at)
 }
 
 function handleParticipant(data: Record<string, any>): void {
@@ -72,17 +73,17 @@ function handleCommunication(data: Record<string, any>, at: string): void {
   const callSid = String(data.channelId ?? '')
   if (!callSid.startsWith('CA')) return
 
-  trackConversation(data.conversationId, callSid, data.occurredAt ?? at)
-  const call = callForConversation(data.conversationId)!
-  if (closedBeforeTracked.delete(data.conversationId) && call.leg === 'caller') endCall(call.callSid, at)
-
   const lineAt = data.occurredAt ?? data.createdAt ?? at
+  // File the line under its own call: a conversation can span several calls.
+  const lineCall = trackConversation(data.conversationId, callSid, lineAt)
+  if (closedBeforeTracked.delete(data.conversationId)) endCall(lineCall, at)
+
   addLine({
     id: data.id,
-    callSid: call.callSid,
+    callSid: lineCall,
     conversationId: data.conversationId,
     at: lineAt,
-    speaker: speakerFor(data.author?.participantId, data.author?.address, data.conversationId, lineAt),
+    speaker: speakerFor(data.author?.participantId, data.author?.address, data.conversationId, lineAt, lineCall),
     text: content.text.trim(),
   })
 }
