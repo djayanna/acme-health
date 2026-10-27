@@ -63,6 +63,11 @@ Tools, prompts and handlers don't change. Claude keeps its tuned settings (effor
 refusal fallbacks, prompt caching); other providers run with their defaults. Pick a
 model that supports tool calling and streaming.
 
+## Warm handoff
+
+How the AI hands a caller to the office — with sequence diagrams, every failure path,
+routes and events: [`docs/warm-handoff.md`](docs/warm-handoff.md).
+
 ## Routes
 
 | Route | Served by | Purpose |
