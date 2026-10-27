@@ -20,6 +20,7 @@ import twilio from 'twilio'
 import { TAC, TACConfig, VoiceChannel } from 'twilio-agent-connect'
 
 export { CallContext } from './callContext.js'
+import { logRelayFrames } from './relayLog.js'
 
 /** Absolute public URL for `path` on PUBLIC_HOST — what Twilio calls and signs. */
 export function publicUrl(path: string): string {
@@ -58,6 +59,8 @@ export const voiceChannel = new VoiceChannel(tac, {
   memoryMode: orchestrated ? 'once' : 'never',
 })
 tac.registerChannel(voiceChannel)
+// Log every ConversationRelay frame (setup, prompt, interrupt, dtmf, error) — see relayLog.ts.
+logRelayFrames(tac, voiceChannel)
 
 /**
  * Fastify `preHandler` that rejects a request whose `X-Twilio-Signature` doesn't match.
